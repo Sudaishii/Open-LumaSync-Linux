@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>openLightsSync</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="window-frame">
+  <div class="titlebar" data-tauri-drag-region>
+    <div class="titlebar-title" data-tauri-drag-region>openLightsSync</div>
+    <div class="titlebar-controls">
+      <button id="titleMinimize" class="titlebar-btn" title="Minimize">&#x2013;</button>
+      <button id="titleMaximize" class="titlebar-btn" title="Maximize">&#x25A1;</button>
+      <button id="titleClose" class="titlebar-btn titlebar-btn-close" title="Close">&#x2715;</button>
+    </div>
+  </div>
+  <div class="app">
+    <header>
+      <div class="header-left">
+        <div id="deviceStatus" class="status disconnected">Disconnected</div>
+      </div>
+      <div class="header-right">
+        <button id="powerToggle" class="icon-btn power-btn" title="Power ON/OFF">&#x23FB;</button>
+        <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
+      </div>
+    </header>
+
+    <!-- Settings overlay -->
+    <div id="settingsOverlay" class="overlay hidden">
+      <div class="overlay-content">
+        <div class="overlay-header">
+          <h3>Settings</h3>
+          <button id="settingsClose" class="icon-btn">&times;</button>
+        </div>
+        <div class="setting-row">
+          <label>Show Modes</label>
+          <input type="checkbox" id="showEffects" checked>
+        </div>
+        <div class="setting-row">
+          <label>Show Audio Sync</label>
+          <input type="checkbox" id="showAudio">
+        </div>
+        <div class="setting-row">
+          <label>Show Screen Sync</label>
+          <input type="checkbox" id="showScreenSync">
+        </div>
+        <hr>
+        <h4>Power</h4>
+        <div class="setting-row">
+          <label>Fade duration (ms)</label>
+          <input id="fadeMs" type="number" min="50" max="5000" value="300" class="small-input">
+        </div>
+        <hr>
+        <h4>Bar Layout</h4>
+        <div class="row">
+          <label>Left</label><input id="secLeft" type="number" min="0" max="100" value="15" class="small-input">
+          <label>Top</label><input id="secTop" type="number" min="0" max="100" value="41" class="small-input">
+          <label>Right</label><input id="secRight" type="number" min="0" max="100" value="15" class="small-input">
+          <span id="totalLeds" class="val">= 71 LEDs</span>
+        </div>
+        <button id="saveSections" class="btn primary" style="margin-top:8px">Save Layout</button>
+        <hr>
+        <h4>Device</h4>
+        <div class="row actions">
+          <button id="connectBtn" class="btn">Connect</button>
+        </div>
+        <hr>
+        <h4>Debug — Single LED</h4>
+        <div class="row">
+          <label>Index</label>
+          <input id="ledIndex" type="number" min="0" value="0" class="small-input">
+          <button id="setLed" class="btn">Set LED</button>
+        </div>
+        <hr>
+        <h4>Log</h4>
+        <div id="log" class="log-area" style="max-height:150px"></div>
+      </div>
+    </div>
+
+    <section class="card" id="colorCard">
+      <h3>Color &amp; Brightness</h3>
+      <div id="pickerContainer"></div>
+      <div class="row" style="margin-top:12px">
+        <label>Brightness</label>
+        <input id="brightness" type="range" min="0" max="255" value="119" class="slider">
+        <span id="brightnessVal" class="val">119</span>
+      </div>
+    </section>
+
+    <section class="card" id="effectsCard">
+      <h3>Mode</h3>
+      <div class="row">
+        <select id="effectSelect">
+          <option value="static">Static</option>
+          <option value="rainbow">Rainbow</option>
+          <option value="pulse">Pulse</option>
+          <option value="chase">Chase</option>
+          <option value="chase_bounce">Chase Bounce</option>
+          <option value="breathe">Breathe</option>
+          <option value="fire">Fire</option>
+          <option value="wave">Wave</option>
+          <option value="sparkle">Sparkle</option>
+          <option value="heartbeat">Heartbeat</option>
+        </select>
+        <label>Speed</label>
+        <input id="effectSpeed" type="range" min="1" max="10" value="5" class="slider short">
+        <span id="effectSpeedVal" class="val">5</span>
+      </div>
+      <div class="row">
+        <button id="startEffect" class="btn primary">Start</button>
+      </div>
+    </section>
+
+    <section class="card" id="audioCard" style="display:none">
+      <h3>Audio Sync</h3>
+      <div class="row">
+        <select id="audioMode">
+          <option value="spectrum">Spectrum</option>
+          <option value="energy">Energy</option>
+          <option value="beat">Beat</option>
+        </select>
+        <label>Sensitivity</label>
+        <input id="audioSensitivity" type="range" min="1" max="30" value="10" class="slider short">
+        <span id="audioSensVal" class="val">1.0</span>
+      </div>
+      <div class="row">
+        <label>Source</label>
+        <select id="audioSource" style="flex:1;max-width:280px">
+          <option value="">Default Monitor</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="audioStart" class="btn primary">Start</button>
+      </div>
+    </section>
+
+    <section class="card" id="screenSyncCard" style="display:none">
+      <h3>Screen Sync</h3>
+      <div class="row">
+        <label>FPS</label>
+        <input id="ambiFps" type="range" min="1" max="10" value="3" class="slider short">
+        <span id="ambiFpsVal" class="val">3</span>
+        <button id="ambiStart" class="btn primary">Start</button>
+      </div>
+    </section>
+
+  </div>
+  </div>
+  <script src="color-picker.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
