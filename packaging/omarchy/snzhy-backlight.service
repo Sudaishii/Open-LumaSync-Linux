@@ -1,0 +1,13 @@
+[Unit]
+Description=snzhy backlight controller
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@CONTROLLER_LAUNCHER@ --background
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

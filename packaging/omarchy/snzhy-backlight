@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Local Omarchy bridge to the single running backlight controller."""
+import ast
+import json
+import subprocess
+import sys
+import time
+
+BASE = ['gdbus', 'call', '--session', '--dest', 'com.snzhy.opensycnlights',
+        '--object-path', '/com/snzhy/opensycnlights', '--method']
+
+def call(method, *args):
+    result = subprocess.run(BASE + ['com.snzhy.opensycnlights.' + method, *args],
+                            capture_output=True, text=True, timeout=3)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
+
+def status():
+    try:
+        data = json.loads(ast.literal_eval(call('GetStatus'))[0])
+        return {**data.get('controller', {}), **{k: v for k, v in data.items() if k != 'controller'}, 'available': True}
+    except (RuntimeError, ValueError, SyntaxError, subprocess.TimeoutExpired):
+        return {'available': False, 'ready': False, 'open': False, 'activity': 'Controller stopped'}
+
+def main():
+    command = sys.argv[1] if len(sys.argv) > 1 else 'status'
+    if command == 'status':
+        return status()
+    state = status()
+    if not state.get('ready'):
+        subprocess.run(['systemctl', '--user', 'start', 'snzhy-backlight.service'], check=True, timeout=8)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            state = status()
+            if state.get('ready'):
+                break
+            time.sleep(.2)
+        if not state.get('ready'):
+            raise RuntimeError('Controller did not become ready. Check snzhy-backlight.service logs.')
+    if command == 'show':
+        call('ShowWindow')
+    elif call('Control', command) != '(true,)':
+        raise RuntimeError('Controller rejected the command')
+    return {'accepted': True, 'command': command}
+
+if __name__ == '__main__':
+    try:
+        print(json.dumps(main()))
+    except (RuntimeError, subprocess.SubprocessError) as error:
+        print(json.dumps({'accepted': False, 'error': str(error)}))
+        sys.exit(1)

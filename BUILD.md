@@ -1,79 +1,69 @@
-# Building from source
+# Build and test
 
-## Prerequisites
+Use a current stable Rust toolchain and the locked dependencies in `src-tauri/Cargo.lock`. The frontend is plain HTML/CSS/JavaScript, embedded in the executable. Node.js is needed only for browser tests. The Tauri CLI is optional for development and packaging.
 
-- **Rust toolchain** (stable, 1.70+): https://rustup.rs
-- **Tauri CLI v2**:
-  ```bash
-  cargo install tauri-cli --version "^2"
-  ```
+## Dependencies
 
-## Build dependencies
+The tested Arch / Omarchy dependencies are listed in [INSTALL.md](INSTALL.md). For a standalone build on Debian/Ubuntu:
 
-```bash
-# Debian/Ubuntu
-sudo apt install \
-  build-essential \
-  libglib2.0-dev \
-  libgtk-3-dev \
-  libwebkit2gtk-4.1-dev \
-  libsoup-3.0-dev \
-  libhidapi-dev \
-  libpulse-dev \
-  libayatana-appindicator3-dev \
-  libjavascriptcoregtk-4.1-dev
-
-# Fedora
-sudo dnf install \
-  gcc gcc-c++ \
-  glib2-devel \
-  gtk3-devel \
-  webkit2gtk4.1-devel \
-  libsoup3-devel \
-  hidapi-devel \
-  pulseaudio-libs-devel \
-  libayatana-appindicator-gtk3-devel \
-  javascriptcoregtk4.1-devel
-
-# Arch
-sudo pacman -S \
-  base-devel \
-  glib2 \
-  gtk3 \
-  webkit2gtk-4.1 \
-  libsoup3 \
-  hidapi \
-  libpulse \
-  libayatana-appindicator
+```sh
+sudo apt install build-essential pkg-config python3 libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libhidapi-dev libudev-dev libpulse-dev libayatana-appindicator3-dev
 ```
 
-## Build commands
+These are build prerequisites, not a claim of tested GNOME or other desktop capture support. Use the capture tools and audio server appropriate to your desktop. Prebuilt `.deb` or AppImage releases are not currently provided.
 
-```bash
-# Development (debug, with hot reload of the UI)
+## Build and run
+
+```sh
+cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+./run.sh
+```
+
+Output: `src-tauri/target/release/snzhy-OpenSycnlights`. `run.sh` builds only if the executable is absent; rebuild explicitly after changing source.
+
+Install the resulting app with `./install.sh`, or add Omarchy integration with `./install.sh --omarchy`. Add `--offline` only when dependencies are cached.
+
+## Checks
+
+```sh
+cargo test --release --locked --manifest-path src-tauri/Cargo.toml
+node --check ui/main.js
+python3 tests/install-check.py
+```
+
+The installer check uses a temporary home and mocked desktop/build commands; it does not change the live bar, service or USB rules. It verifies portable paths, independent installed files, standalone/Omarchy modes, fresh-build behavior and updates.
+
+Browser regressions require Playwright and Chromium:
+
+```sh
+npm install --no-save --package-lock=false playwright
+npx playwright install chromium
+node tests/ui-check.cjs
+```
+
+They cover controller state, resume, native persistence, scenes, responsive layouts and mocked command wiring. They do not prove physical hardware behavior.
+
+`tests/audio-live-check.cjs`, `tests/sync-live-check.cjs` and `tests/shell-live-check.py` drive real hardware or desktop capture. Read each script before running: they change lighting, may show fullscreen colors/play tones, and require the corresponding desktop environment. The shell test enables resume and selects `DP-1`; adjust it for your own monitor. Do not run isolated USB diagnostics alongside another controller process.
+
+## Optional Tauri development and bundles
+
+```sh
+cargo install tauri-cli --version '^2' --locked
 cargo tauri dev
-
-# Release build (optimized binary + bundles)
 cargo tauri build
-
-# .deb package only
-cargo tauri build --bundles deb
 ```
 
-## Output
+Bundle targets are configured in `src-tauri/tauri.conf.json`. Packaging configuration exists, but generated installers need independent validation and USB-permission documentation before being advertised as supported downloads.
 
-| Artifact | Path |
-|----------|------|
-| Binary | `src-tauri/target/release/openLightsSync` |
-| .deb | `src-tauri/target/release/bundle/deb/openLightsSync_0.1.0_amd64.deb` |
+## Structure
 
-Install the .deb with:
-```bash
-sudo dpkg -i src-tauri/target/release/bundle/deb/openLightsSync_0.1.0_amd64.deb
-```
+| Path | Role |
+|---|---|
+| `ui/` | Interface, local fonts and settings controls |
+| `src-tauri/src/` | USB protocol, lighting/audio workers, capture, native persistence and D-Bus |
+| `packaging/install.py` | Portable user installation |
+| `packaging/omarchy/` | Dedicated widget, service template and bridge |
+| `tests/` | Rust-adjacent browser, installer and live-device checks |
+| `docs/images/` | Public documentation images |
 
-## Notes
-
-- AppImage bundling may fail in headless environments; the .deb target is reliable.
-- The frontend is plain HTML/CSS/JS in the `ui/` folder — no Node.js or npm required.
-- `cargo tauri dev` serves the UI from `ui/` directly with hot reload.
+The inherited `gnome-extension/` is legacy upstream material and is not integrated with this derivative's D-Bus identity. Do not use it as a supported installation route.

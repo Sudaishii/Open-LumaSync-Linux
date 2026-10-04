@@ -1,336 +1,173 @@
-const { invoke } = window.__TAURI__.core;
-const { getCurrentWindow } = window.__TAURI__.window;
-const { availableMonitors, currentMonitor } = window.__TAURI__.window;
-
-function $(id) { return document.getElementById(id); }
-const brightnessEl = $('brightness'), brightnessVal = $('brightnessVal');
-const powerToggle = $('powerToggle');
-const fadeMsEl = $('fadeMs');
-const ledIndexEl = $('ledIndex'), setLedBtn = $('setLed');
-const logEl = $('log');
-const deviceStatus = $('deviceStatus');
-const secLeft = $('secLeft'), secTop = $('secTop'), secRight = $('secRight');
-const totalLedsEl = $('totalLeds'), saveSectionsBtn = $('saveSections');
-const effectSelect = $('effectSelect');
-const effectSpeed = $('effectSpeed'), effectSpeedVal = $('effectSpeedVal');
-const startEffectBtn = $('startEffect');
-const connectBtn = $('connectBtn');
-
-let currentTotalLeds = 71;
-let currentRgb = { r: 255, g: 0, b: 0 };
-let activeMode = null;
-let activeEffect = null;
-
-// Titlebar window controls
-const appWindow = getCurrentWindow();
-$('titleMinimize').onclick = () => appWindow.minimize();
-$('titleMaximize').onclick = async () => {
-  (await appWindow.isMaximized()) ? appWindow.unmaximize() : appWindow.maximize();
-};
-$('titleClose').onclick = () => appWindow.hide();
-
-// Debounce helpers
-let _colorTimer = null;
-let _briTimer = null;
-
-function sendColor() {
-  clearTimeout(_colorTimer);
-  _colorTimer = setTimeout(() => {
-    const apply = activeEffect === 'static' || activeMode === null;
-    invoke('update_global_color', { r: currentRgb.r, g: currentRgb.g, b: currentRgb.b, apply }).catch(() => {});
-  }, 50);
+const $ = id => document.getElementById(id);
+const native = Boolean(window.__TAURI__?.core?.invoke);
+const invoke = (name, args = {}) => native ? window.__TAURI__.core.invoke(name, args) : Promise.reject(new Error('Open the native desktop app to control your backlight.'));
+const icons = {sun:'<circle cx="10" cy="10" r="4"/><path d="M10 1v2m0 14v2M1 10h2m14 0h2M3.5 3.5l1.4 1.4m10.2 10.2 1.4 1.4M3.5 16.5l1.4-1.4M15.1 4.9l1.4-1.4"/>',screen:'<rect x="2" y="3" width="16" height="11" rx="2"/><path d="M7 18h6m-3-4v4"/>',audio:'<path d="M3 8v4m4-8v12m4-14v16m4-12v8m4-6v4"/>',bookmark:'<path d="M5 3h10v15l-5-4-5 4z"/>',layout:'<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M6 3v14M6 7h12"/>',settings:'<path d="M3 5h14M3 15h14M7 2v6m6 4v6"/>',power:'<path d="M10 1v8m-5-5a8 8 0 1 0 10 0"/>',refresh:'<path d="M17 7a7 7 0 1 0 0 7M17 2v5h-5"/>',plus:'<path d="M10 4v12M4 10h12"/>',trash:'<path d="M3 5h14M8 2h4M5 5l1 13h8l1-13M8 8v7m4-7v7"/>'};
+function renderIcons(root = document) { root.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true">${icons[el.dataset.icon] || icons.sun}</svg>`; }); }
+const escapeHTML = text => String(text).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let sourceError = "";
+let shellReady=false,settingsReady=false,settingsWrites=Promise.resolve();
+const effects = [{id:'static',name:'Static',sample:'#efb575'},{id:'rainbow',name:'Rainbow',sample:'linear-gradient(135deg,#ef9e77,#a68fdc,#76bfb5)'},{id:'breathe',name:'Breathe',sample:'radial-gradient(circle,#d7e8b6,#3e554d)'},{id:'wave',name:'Wave',sample:'linear-gradient(135deg,#30566b,#8abcd4)'},{id:'pulse',name:'Pulse',sample:'radial-gradient(circle,#c0a2df,#58496d)'},{id:'chase',name:'Chase',sample:'linear-gradient(90deg,#394339 30%,#b7d1a2 30%,#b7d1a2 65%,#394339 65%)'},{id:'chase_bounce',name:'Chase bounce',sample:'linear-gradient(90deg,#635043,#f0b98a,#635043)'},{id:'fire',name:'Fire',sample:'linear-gradient(0deg,#8d3025,#ed995b)'},{id:'sparkle',name:'Sparkle',sample:'radial-gradient(circle at 30% 35%,#e8d5a8 10%,#534e3e 16%,#282a26)'},{id:'heartbeat',name:'Heartbeat',sample:'linear-gradient(135deg,#a64f56,#e5a0a0)'}];
+const audioStyles = [{id:'bounce',name:'Bounce',hint:'A colored band travels back and forth with the sound.'},{id:'spectrum',name:'Spectrum',hint:'Frequency bands brighten different parts of the palette.'},{id:'energy',name:'Energy',hint:'The whole palette fades with the volume.'},{id:'beat',name:'Beat',hint:'Colors spread outward from the center with the sound.'},{id:'comet',name:'Comet',hint:'A moving head leaves a colored tail; louder sound makes it brighter.'},{id:'twin_bounce',name:'Twin bounce',hint:'Two mirrored bands meet in the middle and bounce apart.'},{id:'ripple',name:'Ripple',hint:'A colored ring travels outward from the center with sound.'},{id:'vu',name:'Volume bars',hint:'Two bars grow outward from the center as volume rises.'},{id:'wave',name:'Ribbon wave',hint:'Soft ribbons travel along the strip, glowing with the volume.'}];
+const audioPalettes = [{id:'rainbow',name:'Rainbow',colors:['#ff0000','#ffdc00','#00ff5a','#00d2ff','#6437ff','#ff00b4']},{id:'aurora',name:'Aurora',colors:['#00e6aa','#468cff','#be41ff']},{id:'sunset',name:'Sunset',colors:['#ff7d1e','#ff376e','#8232eb']},{id:'ocean',name:'Ocean',colors:['#00e1f0','#0f46ff','#5aafff']},{id:'neon',name:'Neon arcade',colors:['#ff0096','#00ffeb','#b4ff00']},{id:'ember',name:'Ember',colors:['#ff1900','#ff7800','#ffdc41']},{id:'forest',name:'Forest',colors:['#149641','#96ff14','#00d296']},{id:'candy',name:'Candy',colors:['#ff5aaf','#9664ff','#41d2ff']},{id:'custom',name:'Custom blend'},{id:'selected',name:'One selected color'}];
+const defaults = {color:'#efb575',brightness:119,lastBrightness:119,effect:'static',speed:4,sections:[15,41,15],fps:15,smoothing:50,depth:40,reverse:false,output:'',audioMode:'bounce',audioPalette:'rainbow',audioSecondary:'#ab94d2',audioSpeed:4,audioWidth:24,audioGate:0,audioReverse:false,source:'',sensitivity:1,fade:300,theme:'dark',accent:'#efb575',compact:false,reduceMotion:false,lastMode:'lighting',resumeEnabled:false,resumeWanted:false};
+const allowedColors = ['#efb575','#92c5b4','#79addc','#ab94d2','#e79090'];
+const clamp = (v,min,max,fallback) => Number.isFinite(Number(v)) ? Math.min(max,Math.max(min,Number(v))) : fallback;
+const isHex = v => /^#[0-9a-f]{6}$/i.test(v || '');
+function normalize(value = {}) { return {...defaults,color:isHex(value.color)?value.color:defaults.color,brightness:Math.round(clamp(value.brightness,0,255,119)),lastBrightness:Math.round(clamp(value.lastBrightness,1,255,119)),effect:effects.some(e=>e.id===value.effect)?value.effect:'static',speed:clamp(value.speed,1,10,4),sections:Array.isArray(value.sections)&&value.sections.length===3&&value.sections.every(n=>Number.isInteger(n)&&n>=0)&&value.sections.reduce((a,b)=>a+b,0)>=1&&value.sections.reduce((a,b)=>a+b,0)<=254?value.sections:[...defaults.sections],fps:Math.round(clamp(value.fps,1,30,15)),smoothing:clamp(value.smoothing,0,95,50),depth:Math.round(clamp(value.depth,1,200,40)),reverse:Boolean(value.reverse),output:typeof value.output==='string'?value.output:'',audioMode:audioStyles.some(s=>s.id===value.audioMode)?value.audioMode:defaults.audioMode,audioPalette:audioPalettes.some(p=>p.id===value.audioPalette)?value.audioPalette:defaults.audioPalette,audioSecondary:isHex(value.audioSecondary)?value.audioSecondary:defaults.audioSecondary,audioSpeed:clamp(value.audioSpeed,1,10,4),audioWidth:clamp(value.audioWidth,8,80,24),audioGate:clamp(value.audioGate,0,30,0),audioReverse:Boolean(value.audioReverse),source:typeof value.source==='string'?value.source:'',sensitivity:clamp(value.sensitivity,.1,5,1),fade:Math.round(clamp(value.fade,0,3000,300)),theme:value.theme==='light'?'light':'dark',accent:allowedColors.includes(value.accent)?value.accent:defaults.accent,compact:Boolean(value.compact),reduceMotion:Boolean(value.reduceMotion),lastMode:['lighting','screen','audio'].includes(value.lastMode)?value.lastMode:'lighting',resumeEnabled:Boolean(value.resumeEnabled),resumeWanted:Boolean(value.resumeWanted)}; }
+let saved = {}; try { saved = JSON.parse(localStorage.getItem('snzhy-controller') || '{}'); } catch {}
+let resumeSettings=saved.resumeSettings&&typeof saved.resumeSettings==='object'?normalize(saved.resumeSettings):null;
+let config = normalize(saved), view = 'controller', selectedMode = config.lastMode, activeMode = null, startingMode = null, connected = false, powered = false, busy = false, sources = [], monitors = [], currentDevice = null, appliedConfig = null;
+let scenes = []; try { scenes=JSON.parse(localStorage.getItem('snzhy-scenes')||'[]'); if(!Array.isArray(scenes)) scenes=[]; scenes=scenes.filter(s=>s&&typeof s.name==='string'&&s.config).slice(0,50).map(s=>({id:String(s.id),name:s.name.slice(0,48),config:{...normalize(s.config),mode:['lighting','screen','audio'].includes(s.config.mode)?s.config.mode:'lighting'}})); } catch { scenes=[]; }
+const builtins = [{id:'warm',name:'Quiet evening',config:normalize({color:'#efb575',brightness:100,effect:'static'})},{id:'focus',name:'Clear focus',config:normalize({color:'#f3e5c5',brightness:170,effect:'static'})},{id:'ocean',name:'Ocean drift',config:normalize({color:'#79addc',brightness:135,effect:'wave',speed:2})},{id:'ember',name:'Slow embers',config:normalize({color:'#e79090',brightness:95,effect:'fire',speed:2})}];
+const audioScenes = [
+ {id:'arcade',name:'Arcade chase',mode:'comet',palette:'neon',speed:6,width:35},
+ {id:'duet',name:'Aurora duet',mode:'twin_bounce',palette:'aurora',speed:3,width:30},
+ {id:'ripples',name:'Ocean ripples',mode:'ripple',palette:'ocean',speed:3,width:20},
+ {id:'bars',name:'Sunset meters',mode:'vu',palette:'sunset',speed:4,width:24},
+ {id:'ribbon',name:'Candy ribbons',mode:'wave',palette:'candy',speed:2,width:40},
+ {id:'forest',name:'Forest bounce',mode:'bounce',palette:'forest',speed:4,width:24}
+];
+for(const scene of audioScenes) builtins.push({id:scene.id,name:scene.name,config:{...normalize({color:'#79addc',brightness:119,audioMode:scene.mode,audioPalette:scene.palette,audioSpeed:scene.speed,audioWidth:scene.width}),mode:'audio'}});
+const extraScenes = [
+ {id:'screen-balanced',name:'Screen · Balanced',description:'Everyday desktop and video, with moderate smoothing.',config:{mode:'screen',fps:15,smoothing:35,depth:60,brightness:119}},
+ {id:'screen-gaming',name:'Screen · Gaming',description:'Faster response and shallow edge sampling. Achieved FPS depends on capture and USB.',config:{mode:'screen',fps:30,smoothing:15,depth:24,brightness:150}},
+ {id:'screen-cinema',name:'Screen · Cinema',description:'Gentler transitions and a wider sampled edge for movie watching.',config:{mode:'screen',fps:12,smoothing:75,depth:120,brightness:100}},
+ {id:'screen-efficient',name:'Screen · Low CPU',description:'Fewer captures and a narrower sampled edge.',config:{mode:'screen',fps:8,smoothing:50,depth:32,brightness:90}},
+ {id:'lavender-breathe',name:'Lavender breathing',description:'A slow lavender fade.',config:{color:'#ab94d2',effect:'breathe',brightness:95,speed:2}},
+ {id:'reading',name:'Reading lamp',description:'Steady warm white for a brighter desk.',config:{color:'#f3e5c5',effect:'static',brightness:150}},
+ {id:'night-desk',name:'Night desk',description:'Dim steady amber.',config:{color:'#efb575',effect:'static',brightness:28}},
+ {id:'mint-wave',name:'Mint waves',description:'Soft green waves along the strip.',config:{color:'#92c5b4',effect:'wave',brightness:100,speed:3}},
+ {id:'prism',name:'Prism trail',description:'A quicker rainbow animation.',config:{effect:'rainbow',brightness:140,speed:6}},
+ {id:'rose-heartbeat',name:'Rose heartbeat',description:'A slow double pulse in rose.',config:{color:'#e79090',effect:'heartbeat',brightness:85,speed:2}},
+ {id:'ember-beats',name:'Ember beats',description:'Warm colors expand from the center with audio level.',config:{mode:'audio',audioMode:'beat',audioPalette:'ember',audioSpeed:3,brightness:110}},
+ {id:'neon-spectrum',name:'Neon frequencies',description:'Neon colors follow frequency energy.',config:{mode:'audio',audioMode:'spectrum',audioPalette:'neon',sensitivity:1.5,brightness:130}}
+];
+for(const scene of extraScenes)builtins.push({...scene,config:{...normalize(scene.config),mode:scene.config.mode||'lighting'}});
+let presetFilter='all';
+function store() {const snapshot={...config,resumeSettings};try {localStorage.setItem('snzhy-controller',JSON.stringify(snapshot));} catch {toast('Your settings could not be saved.',true);}if(native&&settingsReady){settingsWrites=settingsWrites.catch(()=>{}).then(()=>invoke('save_controller_config',{config:snapshot}));settingsWrites.catch(e=>toast(`Could not save controller settings: ${e}`,true));}}
+function saveScenes() {try {localStorage.setItem('snzhy-scenes',JSON.stringify(scenes));} catch {toast('Your scenes could not be saved.',true);} }
+let toastTimer;
+function toast(text,error=false) { $('toast').textContent=String(text);$('toast').classList.toggle('error',error);$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,error?6500:3000); }
+function appearance() {document.body.classList.toggle('light',config.theme==='light');document.body.classList.toggle('compact',config.compact);document.body.classList.toggle('reduce-motion',config.reduceMotion);document.documentElement.style.setProperty('--accent',config.accent);document.documentElement.style.setProperty('--accent-ink',config.theme==='light'?({'#efb575':'#80460d','#92c5b4':'#246049','#79addc':'#235c88','#ab94d2':'#604086','#e79090':'#913b3b'}[config.accent]):config.accent);}
+function screenColorContext(){return view==='screen'||(['controller','presets'].includes(view)&&selectedMode==='screen');}
+function syncGlobals() {const screenColors=screenColorContext();document.querySelector('.quick-palette').hidden=screenColors;document.querySelector('.color-value').hidden=screenColors;$('previewColor').hidden=screenColors;$('brightness').value=config.brightness;$('brightnessValue').textContent=`${Math.round(config.brightness/255*100)}%`;$('colorPicker').value=config.color;$('hexColor').value=config.color.toUpperCase();$('previewColor').textContent=config.color.toUpperCase();document.querySelectorAll('[data-color]').forEach(b=>b.classList.toggle('chosen',b.dataset.color===config.color));$('ledSummary').textContent=`Layout: ${config.sections.reduce((a,b)=>a+b,0)} LEDs`;$('power').setAttribute('aria-pressed',String(powered));$('powerLabel').textContent=powered?'Turn off':'Turn on';$('power').disabled=!connected||busy;$('modeBadge').textContent=!powered?'Idle':activeMode==='screen'?'Screen sync':activeMode==='audio'?'Audio sync':activeMode==='lighting'?(effects.find(e=>e.id===appliedConfig?.effect)?.name||'Static'):'Steady';$('activity').classList.toggle('activity-running',powered&&connected);document.querySelectorAll('[data-run-preset]').forEach(b=>b.disabled=!connected||busy);syncController();publishShellStatus(); }
+let actionQueue=Promise.resolve();
+function action(fn,success) {const task=actionQueue.then(()=>performAction(fn,success));actionQueue=task.catch(()=>{});return task;}
+async function performAction(fn, success) {busy=true;syncGlobals();try {if(!native)throw new Error('Open the native app to control your USB backlight.');if(!connected)throw new Error('Connect your backlight first. Use the reconnect button at the bottom left.');await fn();if(success)toast(success);}catch(e){if(!activeMode)$('activity').textContent=`Action failed · ${String(e)}`;toast(String(e),true);}finally{busy=false;startingMode=null;syncGlobals();} }
+const hexRGB = value => ({r:parseInt(value.slice(1,3),16),g:parseInt(value.slice(3,5),16),b:parseInt(value.slice(5,7),16)});
+const rgb = () => hexRGB(config.color);
+function restoreBrightness(){if(config.brightness===0){config.brightness=config.lastBrightness||119;store();syncGlobals();toast(`Restored brightness to ${Math.round(config.brightness/255*100)}%.`);}}
+function cancelModeUpdates(){clearTimeout(audioRestartTimer);clearTimeout(screenRestartTimer);clearTimeout(speedTimer);}
+function chooseMode(mode){selectedMode=mode;config.lastMode=mode;store();}
+async function start(mode=selectedMode) {
+ cancelModeUpdates();startingMode=mode;restoreBrightness();
+ const settings={...config,sections:[...config.sections]},color=hexRGB(settings.color);
+ await invoke('effects_stop');activeMode=null;config.resumeWanted=false;store();syncGlobals();
+ await invoke('set_sections',{sections:settings.sections});
+ if(mode==='lighting'&&settings.effect==='static'){
+  await invoke('set_color_brightness',{section:1,...color,brightness:settings.brightness});
+ }else{
+  await invoke('update_global_color',{...color,apply:false});await invoke('set_brightness',{value:settings.brightness});
+  if(mode==='lighting')await invoke('effects_start',{name:settings.effect,ledCount:settings.sections.reduce((a,b)=>a+b,0),speed:settings.speed});
+  else if(mode==='audio')await invoke('audio_start',{mode:settings.audioMode,sensitivity:settings.sensitivity,source:settings.source||null,palette:settings.audioPalette,secondaryColor:hexRGB(settings.audioSecondary),speed:settings.audioSpeed,width:settings.audioWidth/100,noiseGate:settings.audioGate/100,reverse:settings.audioReverse});
+  else await invoke('ambilight_start',{fps:settings.fps,output:settings.output||null,smoothing:settings.smoothing/100,depth:settings.depth,reverse:settings.reverse});
+ }
+ powered=true;activeMode=mode;appliedConfig=settings;chooseMode(mode);resumeSettings=normalize({...settings,lastMode:mode});config.resumeWanted=true;store();
+ $('activity').textContent=mode==='screen'?'Screen sync requested · experimental':mode==='audio'?'Listening to your selected audio source.':`Lighting · ${effects.find(e=>e.id===settings.effect)?.name}`;syncGlobals();
 }
-
-function sendBrightness() {
-  clearTimeout(_briTimer);
-  _briTimer = setTimeout(() => {
-    invoke('set_brightness', { value: +brightnessEl.value }).catch(() => {});
-  }, 50);
+async function stop() {cancelModeUpdates();await invoke('effects_stop');activeMode=null;config.resumeWanted=false;store();$('activity').textContent='Modes stopped · current color remains on the light.';syncGlobals();}
+let colorTimer,brightnessTimer,speedTimer;
+function setColor(value) {if(!isHex(value)){toast('Enter a six-digit hex color, such as #EFB575.',true);return;}config.color=value.toLowerCase();store();syncGlobals();syncAudioPalette();clearTimeout(colorTimer);if(powered&&connected)colorTimer=setTimeout(()=>action(()=>invoke('update_global_color',{...rgb(),apply:activeMode==='lighting'&&config.effect==='static'})),100);}
+function heading(title,description,tag=''){return `<div class="section-heading"><div><h2>${title}</h2><p>${description}</p></div>${tag?`<span class="small-tag">${tag}</span>`:''}</div>`;}
+function range(id,label,value,min,max,step,unit=''){return `<div class="field"><div class="control-heading"><label for="${id}">${label}</label><output id="${id}Value" for="${id}">${value}${unit}</output></div><input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}"></div>`;}
+function toggle(id,title,description,checked){return `<label class="setting-row" for="${id}"><span><strong>${title}</strong><p>${description}</p></span><input type="checkbox" id="${id}" ${checked?'checked':''}></label>`;}
+function modeButtons(label){return `<div class="action-row"><button class="primary-button" id="startMode">${label}</button><button class="secondary-button" id="stopMode">Stop</button><button class="icon-button" id="saveScene" title="Save scene" aria-label="Save current scene"><span data-icon="bookmark"></span></button></div>`;}
+const viewMeta={controller:['Controller','Your everyday controls, together in one place.'],lighting:['Lighting','Make the space around your screen your own.'],screen:['Screen sync','Extend your screen into the space around it.'],audio:['Audio sync','Let your backlight follow what you hear.'],presets:['Presets','Your favorite settings, ready in one click.'],layout:['LED layout','Match the controller to your physical light strip.'],settings:['Settings','A controller that feels like yours.']};
+function syncController(){
+ if(!$('controllerStatus'))return;
+ const current=activeMode==='audio'?`Audio sync · ${audioStyles.find(s=>s.id===appliedConfig?.audioMode)?.name||'Listening'}`:activeMode==='screen'?'Screen sync':activeMode==='lighting'?`Lighting · ${effects.find(e=>e.id===appliedConfig?.effect)?.name||'Static'}`:powered?'Steady light · modes stopped':'Light is off';
+ $('controllerStatus').textContent=connected?(busy?'Applying mode…':current):'Connect your backlight to begin.';
+ $('controllerDetail').textContent=$('activity').textContent;
+ $('startMode').disabled=!connected||busy;$('stopMode').disabled=!connected||busy||!activeMode;
+ document.querySelectorAll('[data-control-mode]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.controlMode===selectedMode));b.classList.toggle('selected',b.dataset.controlMode===selectedMode);});
 }
-
-// Stop all modes
-async function stopAll() {
-  try { await invoke('effects_stop', {}); } catch (e) {}
-  activeMode = null;
-  activeEffect = null;
-  updateActiveIndicators();
+function renderController(el){
+ el.innerHTML=heading('Take control','Choose a mode here. Its detailed settings stay in their own tabs.')+`<div class="controller-live"><strong id="controllerStatus"></strong><p id="controllerDetail"></p></div><div class="controller-modes" role="group" aria-label="Choose mode">${[['lighting','Lighting','sun'],['screen','Screen sync','screen'],['audio','Audio sync','audio']].map(([mode,label,icon])=>`<button class="secondary-button" data-control-mode="${mode}" aria-pressed="${selectedMode===mode}"><span data-icon="${icon}"></span>${label}</button>`).join('')}</div>`;
+ if(selectedMode==='audio')el.innerHTML+=`<div class="field"><label for="controlAudioStyle">Audio style</label><select id="controlAudioStyle">${audioStyles.map(s=>`<option value="${s.id}" ${config.audioMode===s.id?'selected':''}>${s.name}</option>`).join('')}</select></div><div class="field"><label for="controlAudioPalette">Palette</label><select id="controlAudioPalette">${audioPalettes.map(p=>`<option value="${p.id}" ${config.audioPalette===p.id?'selected':''}>${p.name}</option>`).join('')}</select></div><div class="field"><label for="controlAudioSource">Audio source</label><select id="controlAudioSource"><option value="">Current playback device (automatic)</option>${sources.map(([name,label])=>`<option value="${escapeHTML(name)}" ${config.source===name?'selected':''}>${escapeHTML(label)}</option>`).join('')}</select><p class="hint">${escapeHTML(sourceError||'Playback sources follow computer sound.')}</p></div>`;
+ else if(selectedMode==='lighting')el.innerHTML+=`<div class="field"><label for="controlEffect">Lighting effect</label><select id="controlEffect">${effects.map(e=>`<option value="${e.id}" ${config.effect===e.id?'selected':''}>${e.name}</option>`).join('')}</select></div>`;
+ else el.innerHTML+=`<div class="field"><label for="controlOutput">Display</label><select id="controlOutput"><option value="">Focused display when sync starts</option>${monitors.filter(m=>m.name).map(m=>`<option value="${escapeHTML(m.name)}" ${config.output===m.name?'selected':''}>${escapeHTML(m.name)}</option>`).join('')}</select></div>`;
+ el.innerHTML+=`${modeButtons('Start selected mode')}<button class="text-button" id="openModeSettings">Open ${selectedMode==='lighting'?'lighting':selectedMode+' sync'} settings</button>${toggle('resumeEnabled','Resume running mode on launch','Reopen the app with the mode you left running. Stop or Turn off cancels the next resume.',config.resumeEnabled)}<p class="hint">Opening a settings tab keeps the current mode running. Silence can dim audio effects while capture continues.</p>`;
+ el.querySelectorAll('[data-control-mode]').forEach(b=>b.onclick=()=>{chooseMode(b.dataset.controlMode);render();});
+ bindModes(selectedMode);
+ $('openModeSettings').onclick=()=>{view=selectedMode;render();};
+ $('resumeEnabled').onchange=e=>{config.resumeEnabled=e.target.checked;store();};
+ for(const [id,key,apply] of [['controlAudioStyle','audioMode',applyAudioSettings],['controlAudioPalette','audioPalette',applyAudioSettings],['controlAudioSource','source',applyAudioSettings],['controlOutput','output',applyScreenSettings],['controlEffect','effect',()=>{if(activeMode==='lighting')action(()=>activeMode==='lighting'?start('lighting'):undefined);} ]])if($(id))$(id).onchange=e=>{config[key]=e.target.value;store();apply();};
 }
-
-function updateActiveIndicators() {
-  $('effectsCard').classList.toggle('card-active', activeMode === 'effect');
-  if ($('audioCard')) $('audioCard').classList.toggle('card-active', activeMode === 'audio');
-  if ($('screenSyncCard')) $('screenSyncCard').classList.toggle('card-active', activeMode === 'screensync');
+function loadScene(scene,announce=true){
+ const identity={theme:config.theme,accent:config.accent,compact:config.compact,reduceMotion:config.reduceMotion,resumeEnabled:config.resumeEnabled,resumeWanted:config.resumeWanted};
+ const deviceSettings=builtins.includes(scene)?{sections:[...config.sections],source:config.source,output:config.output,reverse:config.reverse,audioReverse:config.audioReverse}:{};
+ config={...normalize(scene.config),...identity,...deviceSettings};chooseMode(scene.config.mode||'lighting');store();appearance();syncGlobals();
+ if(announce)toast(`Loaded ${scene.name}. Start ${selectedMode==='lighting'?'lighting':selectedMode+' sync'} when ready.`);
 }
-
-// Spectrum picker
-const picker = new SpectrumPicker($('pickerContainer'), (rgb) => {
-  currentRgb = rgb;
-  sendColor();
-});
-
-function log(...args) {
-  logEl.textContent += args.join(' ') + '\n';
-  logEl.scrollTop = logEl.scrollHeight;
+function renderPresets(el){
+ const all=[...builtins,...scenes],visible=all.filter(s=>presetFilter==='all'||(presetFilter==='personal'?scenes.includes(s):(s.config.mode||'lighting')===presetFilter));
+ el.innerHTML=heading('Find your next mood','Lighting, music and monitor profiles, ready to use.')+`<div class="field"><label for="presetFilter">Show presets</label><select id="presetFilter">${[['all','All scenes'],['lighting','Lighting'],['screen','Screen sync'],['audio','Audio sync'],['personal','My scenes']].map(([id,label])=>`<option value="${id}" ${presetFilter===id?'selected':''}>${label}</option>`).join('')}</select></div><div class="preset-list">${visible.map(s=>{
+  const mode=s.config.mode||'lighting';
+  const detail=mode==='screen'?`Screen sync · ${s.config.fps} fps target · ${s.config.smoothing}% smoothing`:mode==='audio'?`${audioStyles.find(a=>a.id===s.config.audioMode)?.name||'Audio'} · ${audioPalettes.find(p=>p.id===s.config.audioPalette)?.name||'Palette'}`:effects.find(e=>e.id===s.config.effect)?.name||'Static';
+  return `<div class="preset-row"><span class="preset-swatch" style="--swatch:${s.config.color}"></span><div class="preset-info"><strong>${escapeHTML(s.name)}</strong><small>${escapeHTML(detail)} · ${Math.round(s.config.brightness/255*100)}% brightness</small>${s.description?`<p>${escapeHTML(s.description)}</p>`:''}</div><div class="preset-actions"><button class="secondary-button" data-preset="${escapeHTML(s.id)}">Load</button><button class="secondary-button" data-run-preset="${escapeHTML(s.id)}">Run now</button>${scenes.includes(s)?`<button class="icon-button" data-delete="${escapeHTML(s.id)}" aria-label="Delete ${escapeHTML(s.name)}"><span data-icon="trash"></span></button>`:''}</div></div>`;
+ }).join('')||'<p class="empty-state">No personal scenes yet. Save your current settings to add one.</p>'}</div><div class="action-row"><button class="primary-button" id="saveScene">Save current scene</button><button class="secondary-button" id="exportScenes">Export</button><button class="secondary-button" id="importScenes">Import</button><input id="sceneFile" type="file" accept="application/json,.json" hidden></div><p class="hint">Load prepares settings. Run now applies the scene immediately. Built-in profiles keep your LED layout, audio source and selected display. Screen capture rates are targets; measured FPS appears while running.</p>`;
+ $('presetFilter').onchange=e=>{presetFilter=e.target.value;render();};
+ el.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>loadScene(all.find(s=>s.id===b.dataset.preset)));
+ el.querySelectorAll('[data-run-preset]').forEach(b=>b.onclick=()=>action(async()=>{const scene=all.find(s=>s.id===b.dataset.runPreset);loadScene(scene,false);await start(scene.config.mode||'lighting');},'Scene started.'));
+ el.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>{const deleted=scenes.find(s=>s.id===b.dataset.delete);scenes=scenes.filter(s=>s.id!==b.dataset.delete);saveScenes();render();toast(`Deleted ${deleted.name}.`);});
+ $('saveScene').onclick=openSave;$('exportScenes').onclick=exportScenes;$('importScenes').onclick=()=>$('sceneFile').click();$('sceneFile').onchange=importScenes;
 }
-
-async function cmd(name, args) {
-  try {
-    const result = await invoke(name, args);
-    log(name, '->', JSON.stringify(result));
-    return result;
-  } catch (e) {
-    log(name, 'ERROR:', e);
-    throw e;
-  }
+function render(){const [title,desc]=viewMeta[view];$('pageTitle').textContent=title;$('pageDescription').textContent=desc;document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('selected',b.dataset.view===view));const el=$('view');
+if(view==='controller'){renderController(el);}
+else if(view==='lighting'){el.innerHTML=heading('Choose a mood','One color or a little movement.')+`<div class="effect-list">${effects.map(e=>`<button class="effect-option ${config.effect===e.id?'selected':''}" data-effect="${e.id}" aria-pressed="${config.effect===e.id}"><span class="effect-sample" style="background:${e.sample}"></span><span class="effect-name">${e.name}</span></button>`).join('')}</div><div class="field-group">${range('speed','Effect speed',config.speed,1,10,.5)}<div class="scale-labels"><span>Unhurried</span><span>Energetic</span></div></div>${modeButtons('Apply lighting')}<p class="hint">Your color and brightness stay shared across modes. Rainbow and fire use their own palettes.</p>`;el.querySelectorAll('[data-effect]').forEach(b=>b.onclick=()=>{config.effect=b.dataset.effect;chooseMode('lighting');store();render();$('view').querySelector(`[data-effect="${config.effect}"]`).focus();if(powered)action(()=>start('lighting'));});bindRange('speed','speed',()=>{if(activeMode==='lighting'&&powered){clearTimeout(speedTimer);speedTimer=setTimeout(()=>action(()=>activeMode==='lighting'?start('lighting'):undefined),250);}});bindModes('lighting');}
+else if(view==='screen'){el.innerHTML=heading('Bring the screen to life','Samples the left, top, and right edges.','Experimental')+`<div class="field"><label for="screenOutput">Display</label><select id="screenOutput"><option value="">Focused display when sync starts</option>${monitors.filter(m=>m.name).map(m=>`<option value="${escapeHTML(m.name)}" ${m.name===config.output?'selected':''}>${escapeHTML(m.name)} · ${m.size.width} × ${m.size.height}</option>`).join('')}</select></div>${range('fps','Capture rate',config.fps,1,30,1,' fps')}${range('smoothing','Color smoothing',config.smoothing,0,95,5,'%')}${range('depth','Sample depth',config.depth,1,200,1,' px')}${toggle('reverse','Reverse LED order','Use when the light colors run in the opposite direction.',config.reverse)}${modeButtons('Start screen sync')}<p class="hint">Uses grim on Hyprland. Capture rate is a target, not a guarantee; screenshot and USB overhead affect performance. Display and sampling changes apply automatically while screen sync is running.</p>`;bindRange('fps','fps',applyScreenSettings,' fps');bindRange('smoothing','smoothing',applyScreenSettings,'%');bindRange('depth','depth',applyScreenSettings,' px');$('screenOutput').onchange=e=>{config.output=e.target.value;store();applyScreenSettings();};$('reverse').onchange=e=>{config.reverse=e.target.checked;store();applyScreenSettings();};bindModes('screen');}
+else if(view==='audio'){el.innerHTML=heading('Set the rhythm','Choose the movement and colors that follow your music.')+`<div class="field"><label for="audioMode">Response style</label><select id="audioMode">${audioStyles.map(style=>`<option value="${style.id}" ${config.audioMode===style.id?'selected':''}>${style.name}</option>`).join('')}</select><p class="hint" id="audioStyleHint">${audioStyles.find(s=>s.id===config.audioMode).hint}</p></div><div class="field"><label for="audioPalette">Color palette</label><select id="audioPalette">${audioPalettes.map(palette=>`<option value="${palette.id}" ${config.audioPalette===palette.id?'selected':''}>${palette.name}</option>`).join('')}</select><div class="audio-palette-preview" id="audioPalettePreview" role="img" aria-label="Selected color palette preview"></div></div><div class="field" id="audioSecondaryField" ${config.audioPalette==='custom'?'':'hidden'}><label for="audioSecondary">Second color · custom blend</label><input id="audioSecondary" type="color" value="${config.audioSecondary}"><p class="hint">Choose the first color with the shared color picker.</p></div>${range('audioSpeed','Movement speed',config.audioSpeed,1,10,.5)}<details class="audio-shaping"><summary>Shape the response</summary>${range('audioWidth','Band / trail width',config.audioWidth,8,80,1,'%')}<p class="hint">Controls Bounce, Twin bounce, Comet, Ripple and Ribbon wave. Volume bars, Energy and Spectrum use their own widths.</p>${range('audioGate','Ignore quiet sound',config.audioGate,0,30,1,'%')}<p class="hint">Sound below this signal level produces a dark frame. Selected-color Energy keeps the light at its minimum brightness.</p>${toggle('audioReverse','Reverse audio direction','Flip the movement and palette along the strip.',config.audioReverse)}</details><div class="field"><label for="audioSource">Audio source</label><select id="audioSource"><option value="">Current playback device (automatic)</option>${sources.map(([name,label])=>`<option value="${escapeHTML(name)}" ${name===config.source?'selected':''}>${escapeHTML(label)}</option>`).join('')}</select><button class="text-button" id="refreshSources">Refresh audio sources</button><p class="hint" id="sourceMessage">${escapeHTML(sourceError || (sources.length ? "Playback sources follow computer sound; inputs follow microphones." : "No source list loaded. Choose Refresh to discover playback devices."))}</p></div>${range('sensitivity','Sensitivity',config.sensitivity,.1,5,.1,'×')}${modeButtons('Start audio sync')}<p class="hint">Style, palette, speed, and source changes apply automatically while audio sync is running. Silent input dims the effect; live signal appears in the status below.</p>`;bindRange('sensitivity','sensitivity',applyAudioSettings,'×');bindRange('audioSpeed','audioSpeed',applyAudioSettings);bindRange('audioWidth','audioWidth',applyAudioSettings,'%');bindRange('audioGate','audioGate',applyAudioSettings,'%');$('audioReverse').onchange=e=>{config.audioReverse=e.target.checked;store();applyAudioSettings();};$('audioSource').onchange=e=>{config.source=e.target.value;store();applyAudioSettings();};$('audioMode').onchange=e=>{config.audioMode=e.target.value;store();$('audioStyleHint').textContent=audioStyles.find(s=>s.id===config.audioMode).hint;applyAudioSettings();};$('audioPalette').onchange=e=>{config.audioPalette=e.target.value;store();syncAudioPalette();applyAudioSettings();};$('audioSecondary').oninput=e=>{config.audioSecondary=e.target.value;store();syncAudioPalette();applyAudioSettings();};$('refreshSources').onclick=async()=>{try{sources=await invoke('list_audio_sources');sourceError=sources.length?'':'No recording sources were reported by your audio service.';render();toast(sources.length?'Audio sources refreshed.':sourceError,!sources.length);}catch(e){sourceError=String(e);render();toast(e,true);}};syncAudioPalette();bindModes('audio');}
+else if(view==='layout'){el.innerHTML=heading('A good fit makes the difference','Count the LEDs along each side of your screen.')+`<div class="layout-summary"><span>Configured strip length</span><strong id="layoutTotal">${config.sections.reduce((a,b)=>a+b,0)} <small>LEDs</small></strong></div><div class="number-grid">${['Left','Top','Right'].map((label,i)=>`<div><label for="section${i}">${label}</label><input id="section${i}" type="number" min="0" max="254" step="1" value="${config.sections[i]}"></div>`).join('')}</div><p class="hint">Default 15 / 41 / 15 is inherited from upstream; set the counts for your strip. The path runs bottom-left → top-left → top-right → bottom-right. Total must be 1–254.</p><div class="action-row"><button class="primary-button" id="saveLayout">Save layout</button></div><div class="field-group"><h3>Test an individual LED</h3><div class="field"><label for="ledIndex">LED number · starts at 1</label><input type="number" id="ledIndex" min="1" max="${config.sections.reduce((a,b)=>a+b,0)}" value="1"></div><div class="action-row"><button class="secondary-button" id="testLed">Set LED to current color</button></div><p class="hint">Stops sync and effects first. Use this to check the start point and direction.</p></div>`;for(let i=0;i<3;i++)$(`section${i}`).oninput=()=>{$('layoutTotal').textContent=`${[0,1,2].reduce((n,i)=>n+Number($(`section${i}`).value),0)} LEDs`;};$('saveLayout').onclick=()=>{const sections=[0,1,2].map(i=>Number($(`section${i}`).value));const total=sections.reduce((a,b)=>a+b,0);if(!sections.every(n=>Number.isInteger(n)&&n>=0&&n<=254)||total<1||total>254){toast('Use whole LED counts totaling 1–254.',true);return;}action(async()=>{await stop();await invoke('set_sections',{sections});config.sections=sections;store();render();syncGlobals();},'LED layout saved.');};$('testLed').onclick=()=>{const index=Number($('ledIndex').value)-1;if(!Number.isInteger(index)||index<0||index>=config.sections.reduce((a,b)=>a+b,0)){toast('Choose an LED inside your configured layout.',true);return;}action(async()=>{await stop();await invoke('set_single_led',{index,...rgb()});powered=true;syncGlobals();},'LED color sent.');};}
+else if(view==='presets'){renderPresets(el);}
+else {el.innerHTML=heading('Make it your controller','Appearance, behavior, and useful details.')+`<label class="setting-row" for="theme"><span><strong>Appearance</strong><p>Choose a surface for your workspace.</p></span><select id="theme"><option value="dark" ${config.theme==='dark'?'selected':''}>Dark studio</option><option value="light" ${config.theme==='light'?'selected':''}>Light desk</option></select></label><label class="setting-row" for="accent"><span><strong>Accent color</strong><p>Controls and selected items.</p></span><select id="accent">${allowedColors.map((c,i)=>`<option value="${c}" ${config.accent===c?'selected':''}>${['Amber','Sage','Blue','Lavender','Rose'][i]}</option>`).join('')}</select></label>${toggle('compact','Compact controls','Keep settings closer together.',config.compact)}${toggle('reduceMotion','Reduce preview motion','Show a still light preview.',config.reduceMotion)}${range('fade','Power-off fade',config.fade,0,3000,100,' ms')}<p class="hint">Closing the native window keeps the controller in the tray. Choose Quit from the tray to exit. Use Controller to choose whether a running mode resumes when you reopen the app.</p><div class="about"><h3>snzhy-OpenSycnlights</h3><p>A native Linux controller for your Robobloq backlight. Built on openLightsSync by crisnar and contributors; interface and controller adaptations by snzhy.</p><p><a href="https://github.com/crisnar/openLightsSync" target="_blank" rel="noreferrer">Upstream project</a> · <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noreferrer">CC BY-NC-SA 4.0</a></p><button class="text-button" id="resetAppearance">Reset appearance</button></div>`;['theme','accent'].forEach(id=>$(id).onchange=e=>{config[id]=e.target.value;store();appearance();});['compact','reduceMotion'].forEach(id=>$(id).onchange=e=>{config[id]=e.target.checked;store();appearance();});bindRange('fade','fade',null,' ms');$('resetAppearance').onclick=()=>{for(const key of ['theme','accent','compact','reduceMotion'])config[key]=defaults[key];store();appearance();render();};}
+renderIcons(el);syncGlobals();}
+function audioPreviewColor(position){const palette=audioPalettes.find(p=>p.id===config.audioPalette);const points=(palette.colors||(palette.id==='selected'?[config.color]:[config.color,config.audioSecondary])).map(hexRGB);const index=((position%1)+1)%1*points.length;const a=points[Math.floor(index)],b=points[(Math.floor(index)+1)%points.length],t=index%1;return `rgb(${Math.round(a.r+(b.r-a.r)*t)} ${Math.round(a.g+(b.g-a.g)*t)} ${Math.round(a.b+(b.b-a.b)*t)})`;}
+function syncAudioPalette(){if(!$('audioPalettePreview'))return;const palette=audioPalettes.find(p=>p.id===config.audioPalette);const colors=palette.colors||(palette.id==='selected'?[config.color]:[config.color,config.audioSecondary]);$('audioPalettePreview').style.background=colors.length===1?colors[0]:`linear-gradient(90deg,${colors.join(',')})`;$('audioPalettePreview').setAttribute('aria-label',`${palette.name} color palette preview`);$('audioSecondaryField').hidden=palette.id!=='custom';}
+function bindRange(id,key,callback,unit=''){const input=$(id);if(!input)return;input.oninput=()=>{config[key]=Number(input.value);$(`${id}Value`).textContent=`${input.value}${unit}`;store();callback?.();};}
+let audioRestartTimer,screenRestartTimer;
+function applyScreenSettings(){clearTimeout(screenRestartTimer);if(activeMode==='screen'||startingMode==='screen')screenRestartTimer=setTimeout(()=>action(()=>activeMode==='screen'?start('screen'):undefined),250);}
+function applyAudioSettings(){clearTimeout(audioRestartTimer);if(activeMode==='audio'||startingMode==='audio')audioRestartTimer=setTimeout(()=>action(()=>activeMode==='audio'?start('audio'):undefined),250);}
+function bindModes(mode){$('startMode').onclick=()=>action(()=>start(mode));$('stopMode').onclick=()=>action(stop);$('saveScene').onclick=openSave;}
+function openSave(){if(scenes.length>=50){toast('You can save up to 50 personal scenes. Export or remove one first.',true);return;}$('presetName').value='';$('presetDialog').showModal();$('presetName').focus();}
+$('cancelPreset').onclick=()=>$('presetDialog').close();$('presetForm').onsubmit=e=>{e.preventDefault();const name=$('presetName').value.trim();if(!name){$('presetName').setCustomValidity('Give this scene a name.');$('presetName').reportValidity();return;}scenes.push({id:crypto.randomUUID(),name:name.slice(0,48),config:{...config,mode:selectedMode}});saveScenes();$('presetDialog').close();if(view==='presets')render();toast(`Saved ${name}.`);};$('presetName').oninput=()=>$('presetName').setCustomValidity('');
+function exportScenes(){const blob=new Blob([JSON.stringify({version:1,scenes},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='snzhy-light-scenes.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+async function importScenes(e){const file=e.target.files[0];if(!file)return;try{if(file.size>131072)throw new Error('Scene file must be smaller than 128 KB.');const parsed=JSON.parse(await file.text());if(parsed.version!==1||!Array.isArray(parsed.scenes)||parsed.scenes.length+scenes.length>50)throw new Error('Use an exported scene file containing at most 50 total scenes.');const imported=parsed.scenes.map(s=>{if(!s||typeof s.name!=='string'||!s.name.trim()||!s.config||typeof s.config!=='object')throw new Error('The scene file contains an invalid scene.');return{id:crypto.randomUUID(),name:s.name.trim().slice(0,48),config:{...normalize(s.config),mode:['screen','audio','lighting'].includes(s.config.mode)?s.config.mode:'lighting'}};});scenes.push(...imported);saveScenes();render();toast(`Imported ${imported.length} scenes.`);}catch(e){toast(e,true);}finally{e.target.value='';}}
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;render();});
+async function setPower(on){
+ if(!on){cancelModeUpdates();await invoke('power_off_fade',{currentBrightness:config.brightness,durationMs:config.fade,section:1,...rgb()});powered=false;activeMode=null;config.resumeWanted=false;store();$('activity').textContent='Light turned off.';}
+ else {restoreBrightness();await invoke('power_on',{section:1,...rgb(),brightness:config.brightness});await start(selectedMode);}
+ syncGlobals();
 }
-
-brightnessEl.addEventListener('input', () => {
-  brightnessVal.textContent = brightnessEl.value;
-  sendBrightness();
-});
-
-effectSpeed.addEventListener('input', () => {
-  effectSpeedVal.textContent = effectSpeed.value;
-  if (activeMode === 'effect' && activeEffect !== 'static') {
-    restartCurrentEffect();
-  }
-});
-
-let _speedRestartTimer = null;
-function restartCurrentEffect() {
-  clearTimeout(_speedRestartTimer);
-  _speedRestartTimer = setTimeout(() => {
-    cmd('effects_start', {
-      name: effectSelect.value,
-      ledCount: currentTotalLeds,
-      speed: +effectSpeed.value,
-    }).catch(() => {});
-  }, 200);
+$('power').onclick=()=>action(()=>setPower(!powered));
+function publishShellStatus(){if(!native||!shellReady)return;const pending=settingsWrites;pending.then(()=>invoke('publish_controller_status',{status:{ready:true,powered,mode:activeMode,selectedMode,busy,activity:$('activity').textContent,resumeEnabled:config.resumeEnabled,audioStyle:config.audioMode,palette:config.audioPalette,output:config.output,displays:monitors.filter(m=>m.name).map(m=>m.name)}})).catch(()=>{});}
+async function handleShellAction(command){
+ if(command==='resume-toggle'){config.resumeEnabled=!config.resumeEnabled;store();if(view==='controller')render();publishShellStatus();return;}
+ await action(async()=>{
+  if(['lighting','audio','screen'].includes(command)){chooseMode(command);if(view==='controller')render();await start(command);}
+  else if(command==='stop')await stop();
+  else if(['off','on','toggle'].includes(command))await setPower(command==='toggle'?!powered:command==='on');
+  else if(command.startsWith('preset:')){const scene=[...builtins,...scenes].find(s=>s.id===command.slice(7));if(!scene)throw new Error('Unknown scene');loadScene(scene,false);await start(scene.config.mode||'lighting');}
+  else if(command.startsWith('display:')){const output=command.slice(8);if(!monitors.some(m=>m.name===output))throw new Error('Display unavailable');config.output=output;store();if(activeMode==='screen')await start('screen');if(view==='controller'||view==='screen')render();}
+  else if(command.startsWith('brightness:')||command==='brightness-up'||command==='brightness-down'){config.brightness=command.startsWith('brightness:')?Math.round(clamp(command.slice(11),0,255,config.brightness)):Math.round(clamp(config.brightness+(command==='brightness-up'?15:-15),0,255,119));if(config.brightness>0)config.lastBrightness=config.brightness;store();await invoke('set_brightness',{value:config.brightness});syncGlobals();}
+ });
+ publishShellStatus();
 }
-
-// Power toggle with debounce
-let isPoweredOn = false;
-let _powerBusy = false;
-powerToggle.onclick = async () => {
-  if (_powerBusy) return;
-  _powerBusy = true;
-  try {
-    if (isPoweredOn) {
-      await stopAll();
-      await cmd('power_off_fade', {
-        currentBrightness: +brightnessEl.value, durationMs: +fadeMsEl.value || 300,
-        section: 1, r: currentRgb.r, g: currentRgb.g, b: currentRgb.b
-      });
-      isPoweredOn = false;
-    } else {
-      await cmd('power_on', {
-        section: 1, r: currentRgb.r, g: currentRgb.g, b: currentRgb.b
-      });
-      isPoweredOn = true;
-    }
-    powerToggle.classList.toggle('on', isPoweredOn);
-  } finally {
-    setTimeout(() => { _powerBusy = false; }, 500);
-  }
-};
-
-setLedBtn.onclick = () => cmd('set_single_led', {
-  index: +ledIndexEl.value, r: currentRgb.r, g: currentRgb.g, b: currentRgb.b
-});
-
-// Sections
-function updateTotalLeds() {
-  currentTotalLeds = (+secLeft.value || 0) + (+secTop.value || 0) + (+secRight.value || 0);
-  totalLedsEl.textContent = '= ' + currentTotalLeds + ' LEDs';
-}
-secLeft.addEventListener('input', updateTotalLeds);
-secTop.addEventListener('input', updateTotalLeds);
-secRight.addEventListener('input', updateTotalLeds);
-saveSectionsBtn.onclick = () => cmd('set_sections', {
-  sections: [+secLeft.value, +secTop.value, +secRight.value]
-});
-
-// Mode — start stops everything else; changing mode restarts
-startEffectBtn.onclick = async () => {
-  const name = effectSelect.value;
-  await cmd('effects_start', {
-    name,
-    ledCount: currentTotalLeds,
-    speed: +effectSpeed.value,
-  });
-  activeMode = 'effect';
-  activeEffect = name;
-  updateActiveIndicators();
-};
-
-effectSelect.addEventListener('change', () => {
-  if (activeMode === 'effect') {
-    startEffectBtn.click();
-  }
-});
-
-// Audio sync
-const audioMode = $('audioMode');
-const audioSensitivity = $('audioSensitivity');
-const audioSensVal = $('audioSensVal');
-const audioStart = $('audioStart');
-const audioSource = $('audioSource');
-
-audioSensitivity.addEventListener('input', () => {
-  audioSensVal.textContent = (audioSensitivity.value / 10).toFixed(1);
-});
-audioSensVal.textContent = (audioSensitivity.value / 10).toFixed(1);
-
-// Load audio sources
-(async () => {
-  try {
-    const sources = await invoke('list_audio_sources', {});
-    for (const [name, label] of sources) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = label;
-      audioSource.appendChild(opt);
-    }
-  } catch (e) { log('list_audio_sources error', e); }
-})();
-
-audioStart.onclick = async () => {
-  const src = audioSource.value || null;
-  await cmd('audio_start', {
-    mode: audioMode.value,
-    sensitivity: +audioSensitivity.value / 10,
-    source: src
-  });
-  activeMode = 'audio';
-  activeEffect = null;
-  updateActiveIndicators();
-};
-
-// Screen Sync
-const ambiFps = $('ambiFps');
-const ambiFpsVal = $('ambiFpsVal');
-const ambiStart = $('ambiStart');
-
-ambiFps.addEventListener('input', () => { ambiFpsVal.textContent = ambiFps.value; });
-
-ambiStart.onclick = async () => {
-  await cmd('ambilight_start', { fps: +ambiFps.value });
-  activeMode = 'screensync';
-  activeEffect = null;
-  updateActiveIndicators();
-};
-
-// Settings overlay
-const settingsBtn = $('settingsBtn');
-const settingsOverlay = $('settingsOverlay');
-const settingsClose = $('settingsClose');
-
-settingsBtn.onclick = () => settingsOverlay.classList.remove('hidden');
-settingsClose.onclick = () => settingsOverlay.classList.add('hidden');
-settingsOverlay.addEventListener('click', (e) => {
-  if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
-});
-
-// Section visibility toggles
-const visibilityMap = {
-  showEffects: 'effectsCard',
-  showAudio: 'audioCard',
-  showScreenSync: 'screenSyncCard',
-};
-
-const defaultVisibility = {
-  showEffects: true,
-  showAudio: false,
-  showScreenSync: false,
-};
-
-function loadVisibility() {
-  try {
-    const saved = JSON.parse(localStorage.getItem('ols_visibility') || 'null');
-    const state = saved || defaultVisibility;
-    for (const [checkId, cardId] of Object.entries(visibilityMap)) {
-      const checkbox = $(checkId);
-      const card = $(cardId);
-      if (!card || !checkbox) continue;
-      const visible = state[checkId] !== undefined ? state[checkId] : defaultVisibility[checkId];
-      checkbox.checked = visible;
-      card.style.display = visible ? '' : 'none';
-    }
-  } catch (e) {}
-}
-
-function saveVisibility() {
-  const state = {};
-  for (const checkId of Object.keys(visibilityMap)) {
-    state[checkId] = $(checkId).checked;
-  }
-  localStorage.setItem('ols_visibility', JSON.stringify(state));
-}
-
-for (const [checkId, cardId] of Object.entries(visibilityMap)) {
-  const checkbox = $(checkId);
-  if (!checkbox) continue;
-  checkbox.addEventListener('change', () => {
-    const card = $(cardId);
-    if (card) card.style.display = checkbox.checked ? '' : 'none';
-    saveVisibility();
-    fitWindow();
-  });
-}
-loadVisibility();
-
-// Device
-connectBtn.onclick = () => cmd('connect_device', {});
-
-// Init — load sections
-(async () => {
-  try {
-    const data = await invoke('get_sections', {});
-    if (data.sections && data.sections.length === 3) {
-      secLeft.value = data.sections[0];
-      secTop.value = data.sections[1];
-      secRight.value = data.sections[2];
-      currentTotalLeds = data.totalLeds;
-      totalLedsEl.textContent = '= ' + currentTotalLeds + ' LEDs';
-    }
-  } catch (e) { log('getSections error', e); }
-})();
-
-// Auto-resize window to content, respecting usable screen area
-async function fitWindow() {
-  try {
-    const monitor = await currentMonitor();
-    if (!monitor) return;
-    const scale = monitor.scaleFactor || 1;
-    const screenW = monitor.size.width / scale;
-    const screenH = monitor.size.height / scale;
-    const reservedTop = 32;
-    const reservedBottom = 48;
-    const maxH = screenH - reservedTop - reservedBottom;
-
-    await new Promise(r => setTimeout(r, 50));
-    const contentH = document.querySelector('.window-frame').scrollHeight;
-    const targetH = Math.min(contentH + 2, maxH);
-    const targetW = Math.min(680, screenW - 40);
-
-    const { LogicalSize } = window.__TAURI__.window;
-    await appWindow.setSize(new LogicalSize(targetW, targetH));
-  } catch (e) {}
-}
-setTimeout(fitWindow, 300);
-
-// Poll device status
-setInterval(async () => {
-  try {
-    const s = await invoke('device_status', {});
-    deviceStatus.textContent = s.open ? 'Connected' : (s.found ? 'Found' : 'Disconnected');
-    deviceStatus.className = 'status ' + (s.open ? 'connected' : 'disconnected');
-    if (s.open && !isPoweredOn) {
-      isPoweredOn = true;
-      powerToggle.classList.add('on');
-    } else if (!s.open) {
-      isPoweredOn = false;
-      powerToggle.classList.remove('on');
-    }
-  } catch (e) {}
-}, 3000);
+$('brightness').oninput=e=>{config.brightness=Number(e.target.value);if(config.brightness>0)config.lastBrightness=config.brightness;store();syncGlobals();clearTimeout(brightnessTimer);if(powered&&connected)brightnessTimer=setTimeout(()=>action(()=>invoke('set_brightness',{value:config.brightness})),100);};
+$('colorPicker').oninput=e=>setColor(e.target.value);$('applyColor').onclick=()=>setColor($('hexColor').value);$('hexColor').onkeydown=e=>{if(e.key==='Enter')setColor(e.target.value);};document.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>setColor(b.dataset.color));
+async function refreshDevice(){if(!native)return;try{const status=await invoke('device_status');const changed=connected!==status.open;connected=status.open;currentDevice=status;$('statusDot').classList.toggle('connected',connected);$('deviceLabel').textContent=connected?'Backlight connected':status.found?'USB permission needed':'Backlight disconnected';$('connectionNotice').hidden=connected;$('connectionNotice').textContent=status.found?'Your light was detected but cannot be opened. Install the USB access rule in the README, then unplug and reconnect it.':'Connect your Robobloq USB backlight, then choose Reconnect.';if(!connected){powered=false;activeMode=null;$('activity').textContent=status.found?'Waiting for USB access.':'Waiting for your backlight.';}else if(changed){if(status.sections){config.sections=status.sections;store();if(view==='layout')render();}$('activity').textContent=status.firmwareInfo?`Backlight connected · ${status.firmwareInfo.ledCount} LEDs · firmware ${status.firmwareInfo.firmware}`:'Backlight connected · choose a mode to begin.';}syncGlobals();if(!busy&&(activeMode==='screen'||activeMode==='audio')){const checkingMode=activeMode,checkingConfig=appliedConfig;const status=await invoke(checkingMode==='screen'?'ambilight_status':'audio_status');if(busy||activeMode!==checkingMode||appliedConfig!==checkingConfig)return;if(status.running&&status.metrics){const m=status.metrics;if(activeMode==='audio')$('activity').textContent=m.frames?`Audio · ${audioStyles.find(s=>s.id===m.mode)?.name||'Sync'} · ${Math.round(m.level*100)}% signal${m.mode==='energy'&&m.palette==='selected'&&typeof m.output_brightness==='number'?` · ${Math.round(m.output_brightness/255*100)}% light`:''} · ${m.level<0.005?'No sound detected—play audio or select another source.':m.source}`:'Waiting for audio samples…';else $('activity').textContent=m.frames?`Screen · ${m.output||'Desktop'} · ${Number(m.achieved_fps||0).toFixed(1)} fps · ${m.frames} frames`:'Waiting for captured colors…';}if(!status.running){const mode=activeMode;activeMode=null;config.resumeWanted=false;store();toast(status.error||`${mode==='screen'?'Screen':'Audio'} sync stopped. Check the source and restart the mode.`,true);$('activity').textContent='Sync stopped · check the source before restarting.';syncGlobals();}}syncController();publishShellStatus();}catch(e){$('deviceLabel').textContent='Device status unavailable';$('connectionNotice').hidden=false;$('connectionNotice').textContent=String(e);}}
+$('reconnect').onclick=async()=>{if(!native){toast('USB connection is available in the native desktop app.',true);return;}try{await invoke('connect_device');await refreshDevice();toast('USB backlight connected.');}catch(e){toast(e,true);await refreshDevice();}};
+async function initialize(){appearance();renderIcons();render();if(!native){$('previewNotice').hidden=false;$('deviceLabel').textContent='Interface preview';return;}try{const persisted=await invoke('get_controller_config');if(persisted&&typeof persisted==='object'){config=normalize(persisted);resumeSettings=persisted.resumeSettings?normalize(persisted.resumeSettings):null;selectedMode=config.lastMode;appearance();render();}}catch(e){toast(`Could not load controller settings: ${e}`,true);}settingsReady=true;store();await refreshDevice();setInterval(refreshDevice,3000);try{const state=await invoke('get_saved_state');if(state.sections)config.sections=normalize({sections:state.sections}).sections;if(state.brightness!==null)config.brightness=state.brightness??119;if(state.r||state.g||state.b)config.color='#'+[state.r,state.g,state.b].map(v=>v.toString(16).padStart(2,'0')).join('');syncGlobals();}catch(e){toast(`Could not load device settings: ${e}`,true);}if(config.resumeEnabled&&config.resumeWanted&&connected){if(resumeSettings){const preferences={theme:config.theme,accent:config.accent,compact:config.compact,reduceMotion:config.reduceMotion,resumeEnabled:config.resumeEnabled,resumeWanted:true,color:config.color,brightness:config.brightness,lastBrightness:config.lastBrightness,sections:config.sections};config={...resumeSettings,...preferences};selectedMode=config.lastMode;if(view==='controller')render();}await action(()=>start(selectedMode));}if(window.__TAURI__.event?.listen){await window.__TAURI__.event.listen('controller-action',event=>handleShellAction(String(event.payload)).catch(e=>toast(e,true)));shellReady=true;publishShellStatus();}try{sources=await invoke('list_audio_sources');sourceError=sources.length?'':'No audio sources found. Choose Refresh to retry.';}catch(e){sourceError=String(e);}if(view==='audio'||view==='controller')render();try{monitors=await invoke('list_screen_outputs');}catch{monitors=[];}if(view==='screen'||view==='controller')render();}
+// The canvas illustrates settings; it does not pretend to measure the physical LEDs.
+const canvas=$('lightCanvas'),ctx=canvas.getContext('2d');let frame=0,lastFrame=0;
+function draw(now){requestAnimationFrame(draw);if(document.hidden||now-lastFrame<50)return;lastFrame=now;const dpr=Math.min(window.devicePixelRatio||1,2),w=canvas.clientWidth,h=canvas.clientHeight;if(canvas.width!==w*dpr||canvas.height!==h*dpr){canvas.width=w*dpr;canvas.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);const isLight=config.theme==='light',x=w*.16,y=h*.21,mw=w*.68,mh=h*.55;ctx.fillStyle=isLight?'#d1d2ca':'#131719';ctx.beginPath();ctx.roundRect(x,y,mw,mh,5);ctx.fill();ctx.strokeStyle=isLight?'#afb2aa':'#383e40';ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=isLight?'#bdc0b6':'#242b2c';ctx.fillRect(w/2-5,y+mh,10,25);ctx.beginPath();ctx.roundRect(w/2-34,y+mh+25,68,4,2);ctx.fill();ctx.strokeStyle=isLight?'#a8afa3':'#35413d';ctx.beginPath();ctx.moveTo(x+mw*.16,y+mh*.61);ctx.bezierCurveTo(x+mw*.3,y+mh*.28,x+mw*.5,y+mh*.86,x+mw*.82,y+mh*.34);ctx.stroke();const [left,top,right]=config.sections,total=left+top+right;const move=!config.reduceMotion&&!matchMedia('(prefers-reduced-motion: reduce)').matches;const t=move?now/1000*config.speed/4:0;for(let i=0;i<total;i++){let px,py;if(i<left){px=x-12;py=y+mh-(i+.5)*mh/Math.max(1,left);}else if(i<left+top){px=x+(i-left+.5)*mw/Math.max(1,top);py=y-12;}else{px=x+mw+12;py=y+(i-left-top+.5)*mh/Math.max(1,right);}let color=screenColorContext()?'#737b80':config.color,alpha=.8;if(view==='audio'||(view==='controller'&&selectedMode==='audio'))color=audioPreviewColor(i/Math.max(1,total-1));if(!screenColorContext()&&(view==='lighting'||activeMode==='lighting')){if(config.effect==='rainbow')color=`hsl(${(i/total*360+t*28)%360} 65% 68%)`;if(['breathe','pulse','heartbeat'].includes(config.effect))alpha=.25+.65*(.5+.5*Math.sin(t*2));if(['chase','chase_bounce','wave'].includes(config.effect))alpha=.15+.8*(.5+.5*Math.sin(i/total*6-t*2));if(config.effect==='fire')color=`hsl(${12+20*(.5+.5*Math.sin(i*1.3+t))} 80% 65%)`;if(config.effect==='sparkle')alpha=.2+.7*(.5+.5*Math.sin(i*4.3+t*2));}ctx.globalAlpha=alpha*(.4+.6*config.brightness/255);ctx.fillStyle=color;ctx.shadowColor=color;ctx.shadowBlur=10;ctx.beginPath();ctx.roundRect(px-2,py-2,4,4,1);ctx.fill();}ctx.globalAlpha=1;ctx.shadowBlur=0;ctx.fillStyle=isLight?'#657063':'#8b9690';ctx.font='10px Manrope, sans-serif';ctx.textAlign='center';ctx.fillText('YOUR DISPLAY',w/2,y+mh*.46);frame++;}
+requestAnimationFrame(draw);initialize();

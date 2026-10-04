@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "snzhy.backlight",
+  "name": "Backlight",
+  "version": "1.0.0",
+  "author": "snzhy",
+  "license": "CC-BY-NC-SA-4.0",
+  "description": "Control the persistent Linux backlight engine from the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Backlight.qml"
+  },
+  "barWidget": {
+    "displayName": "Backlight",
+    "description": "Screen and audio sync, lighting, brightness and monitor controls.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

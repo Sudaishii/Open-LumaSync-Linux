@@ -9,20 +9,20 @@ pub const AVAILABLE_EFFECTS: &[&str] = &[
 ];
 
 pub struct EffectRunner {
-    running: Arc<AtomicBool>,
+    running: std::sync::Mutex<Arc<AtomicBool>>,
     active_name: std::sync::Mutex<Option<String>>,
 }
 
 impl EffectRunner {
     pub fn new() -> Self {
         EffectRunner {
-            running: Arc::new(AtomicBool::new(false)),
+            running: std::sync::Mutex::new(Arc::new(AtomicBool::new(false))),
             active_name: std::sync::Mutex::new(None),
         }
     }
 
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
+        self.running.lock().unwrap().load(Ordering::Relaxed)
     }
 
     pub fn get_status(&self) -> Option<String> {
@@ -30,7 +30,7 @@ impl EffectRunner {
     }
 
     pub fn stop(&self) {
-        self.running.store(false, Ordering::Relaxed);
+        self.running.lock().unwrap().store(false, Ordering::Relaxed);
         *self.active_name.lock().unwrap() = None;
     }
 
@@ -50,14 +50,14 @@ impl EffectRunner {
         if name == "static" {
             *self.active_name.lock().unwrap() = Some(name.to_string());
             let color = hid.get_global_color();
-            let _ = hid.set_color(1, color.r, color.g, color.b);
+            hid.set_color(1, color.r, color.g, color.b)?;
             return Ok(());
         }
 
-        self.running.store(true, Ordering::Relaxed);
+        *self.running.lock().unwrap() = Arc::new(AtomicBool::new(true));
         *self.active_name.lock().unwrap() = Some(name.to_string());
 
-        let running = self.running.clone();
+        let running = self.running.lock().unwrap().clone();
         let name = name.to_string();
 
         thread::spawn(move || {
@@ -124,13 +124,8 @@ fn send_frame(hid: &HidController, colors: &[LedColor], running: &AtomicBool) ->
     if !running.load(Ordering::Relaxed) {
         return false;
     }
-    let bri = hid.get_brightness() as f64 / 255.0;
-    let scaled: Vec<LedColor> = colors.iter().map(|c| LedColor {
-        r: (c.r as f64 * bri).round() as u8,
-        g: (c.g as f64 * bri).round() as u8,
-        b: (c.b as f64 * bri).round() as u8,
-    }).collect();
-    if let Err(e) = hid.send_per_led_colors(&scaled) {
+    // Hardware brightness (0x87) already scales output; do not dim RGB twice.
+    if let Err(e) = hid.send_per_led_colors(colors) {
         log::error!("effect frame error: {}", e);
         return false;
     }

@@ -26,6 +26,9 @@ impl Default for LedColor {
 
 pub struct HidController {
     device: Mutex<Option<HidDevice>>,
+    control_lock: Mutex<Option<std::fs::File>>,
+    screen_sc_supported: Mutex<bool>,
+    pub firmware_info: Mutex<Option<serde_json::Value>>,
     id_counter: Mutex<u8>,
     pub total_leds: Mutex<u16>,
     pub last_color_payload: Mutex<Option<Vec<u8>>>,
@@ -40,7 +43,10 @@ impl HidController {
     pub fn new() -> Self {
         HidController {
             device: Mutex::new(None),
-            id_counter: Mutex::new(0),
+            control_lock: Mutex::new(None),
+            screen_sc_supported: Mutex::new(false),
+            firmware_info: Mutex::new(None),
+            id_counter: Mutex::new(1),
             total_leds: Mutex::new(71),
             last_color_payload: Mutex::new(None),
             current_brightness: Mutex::new(0x77),
@@ -76,7 +82,7 @@ impl HidController {
     fn next_id(&self) -> u8 {
         let mut id = self.id_counter.lock().unwrap();
         *id = id.wrapping_add(1);
-        if *id == 0 {
+        if *id == 0 || *id >= 255 {
             *id = 1;
         }
         *id
@@ -90,25 +96,10 @@ impl HidController {
         s
     }
 
-    #[allow(dead_code)]
-    fn sc_crc(data: &[u8], len: usize) -> u16 {
-        let table: [u16; 2] = [0, 21315];
-        let mut r: u16 = 0;
-        for i in 0..len {
-            let mut o = data[len - 1 - i] as u16;
-            for _ in 0..8 {
-                r = (r >> 1) ^ table[((r ^ o) & 1) as usize];
-                o >>= 1;
-            }
-        }
-        r & 0xffff
-    }
-
     fn to_report(buf: &[u8]) -> Vec<u8> {
-        let mut out = vec![0u8; REPORT_SIZE + 1];
-        out[0] = 0x00;
-        let copy_len = buf.len().min(REPORT_SIZE);
-        out[1..1 + copy_len].copy_from_slice(&buf[..copy_len]);
+        let mut out = Vec::with_capacity(buf.len() + 1);
+        out.push(0); // HID report ID, exactly as the stock USB adapter.
+        out.extend_from_slice(buf);
         out
     }
 
@@ -125,22 +116,31 @@ impl HidController {
         }
     }
 
+    fn claim_control(path: &std::path::Path) -> Result<std::fs::File, String> {
+        let owner = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(path).map_err(|e|format!("Cannot open controller ownership lock: {e}"))?;
+        owner.try_lock().map_err(|_| "Another controller owns the backlight. Quit its GUI before running a hardware test.".to_string())?;
+        Ok(owner)
+    }
+
     pub fn open_device(&self) -> Result<(), String> {
         let mut dev = self.device.lock().unwrap();
         if dev.is_some() {
             return Ok(());
         }
+        let owner = Self::claim_control(&crate::state::dirs_config().join("usb-owner.lock"))?;
         let api = HidApi::new().map_err(|e| format!("HidApi init failed: {}", e))?;
         let info = api
             .device_list()
-            .find(|d| Self::is_supported(d.vendor_id(), d.product_id()))
-            .ok_or_else(|| "SyncLight device not found".to_string())?;
+            .find(|d| Self::is_supported(d.vendor_id(), d.product_id()) && d.usage_page() >= 0xff00)
+            .ok_or_else(|| "Supported SyncLight vendor HID interface not found. Reconnect your USB backlight.".to_string())?;
         let d = info
             .open_device(&api)
             .map_err(|e| format!("Failed to open device: {}", e))?;
         d.set_blocking_mode(false)
             .map_err(|e| format!("Failed to set non-blocking: {}", e))?;
         *dev = Some(d);
+        *self.control_lock.lock().unwrap() = Some(owner);
         log::info!("HID device opened");
         Ok(())
     }
@@ -149,6 +149,9 @@ impl HidController {
         let mut dev = self.device.lock().unwrap();
         if dev.is_some() {
             drop(dev.take());
+            self.control_lock.lock().unwrap().take();
+            *self.screen_sc_supported.lock().unwrap() = false;
+            *self.firmware_info.lock().unwrap() = None;
             log::info!("HID device closed");
         }
     }
@@ -158,11 +161,14 @@ impl HidController {
     }
 
     fn write_report(&self, buf: &[u8]) -> Result<(), String> {
-        let report = Self::to_report(buf);
         let dev = self.device.lock().unwrap();
         let d = dev.as_ref().ok_or("Device not open")?;
-        d.write(&report)
-            .map_err(|e| format!("HID write failed: {}", e))?;
+        // Keep the device lock across all chunks: frames must never interleave.
+        for chunk in buf.chunks(REPORT_SIZE) {
+            let report = Self::to_report(chunk);
+            let written = d.write(&report).map_err(|e| format!("HID write failed: {}", e))?;
+            if written != report.len() { return Err(format!("Incomplete HID write: {} of {} bytes.", written, report.len())); }
+        }
         Ok(())
     }
 
@@ -190,6 +196,7 @@ impl HidController {
     pub fn send_rb(&self, action: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
         let payload_len = payload.len();
         let total_len = 6 + payload_len;
+        if total_len > 255 { return Err("RB packet exceeds its 8-bit length field".into()); }
         let mut buf = vec![0u8; total_len];
         buf[0] = b'R';
         buf[1] = b'B';
@@ -204,28 +211,65 @@ impl HidController {
         Ok(buf)
     }
 
-    #[allow(dead_code)]
-    pub fn send_sc(&self, action: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
-        let payload_len = payload.len();
-        let total_len = 7 + payload_len;
-        let mut buf = vec![0u8; total_len];
-        buf[0] = b'S';
-        buf[1] = b'C';
-        buf[2] = total_len as u8;
-        buf[3] = self.next_id();
-        buf[4] = action;
-        if payload_len > 0 {
-            buf[5..5 + payload_len].copy_from_slice(payload);
-        }
-        let crc = Self::sc_crc(&buf, total_len - 2);
-        buf[total_len - 2] = (crc >> 8) as u8;
-        buf[total_len - 1] = (crc & 0xff) as u8;
-        self.write_with_retry(&buf, 4)?;
+    fn screen_packet(id: u8, action: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
+        let total_len = 7 + payload.len();
+        if total_len > u16::MAX as usize { return Err("SC packet too large".into()); }
+        let mut buf = vec![b'S', b'C'];
+        buf.extend_from_slice(&(total_len as u16).to_be_bytes());
+        buf.extend_from_slice(&[id, action]);
+        buf.extend_from_slice(payload);
+        buf.push(Self::checksum(&buf));
         Ok(buf)
     }
 
+    pub fn send_screen_colors(&self, colors: &[LedColor]) -> Result<(), String> {
+        // Stock software uses RB segments for old firmware. Unknown firmware
+        // takes that compatible route until a validated version enables SC.
+        if !*self.screen_sc_supported.lock().unwrap() { return self.send_per_led_colors(colors); }
+        let payload = self.build_segment_data(colors);
+        let packet = Self::screen_packet(self.next_id(), 0x80, &payload)?;
+        self.write_with_retry(&packet, 4)
+    }
+
     pub fn build_section_payload(&self, section: u8, r: u8, g: u8, b: u8) -> Vec<u8> {
-        vec![section, r, g, b, 0x47, 0x48, 0x00, 0x00, 0x00, 0xfe]
+        let total = self.get_total_leds() as u8;
+        let mut payload = vec![section, r, g, b, total];
+        if total < 254 { payload.extend_from_slice(&[total + 1, 0, 0, 0, 254]); }
+        payload
+    }
+
+    pub fn read_device_info(&self) -> Result<serde_json::Value, String> {
+        let request = self.send_rb(0x82, &[])?;
+        let dev = self.device.lock().unwrap();
+        let d = dev.as_ref().ok_or("Device not open")?;
+        let deadline = std::time::Instant::now() + Duration::from_millis(600);
+        let mut response = [0u8; 256];
+        let mut last_response = Vec::new();
+        while std::time::Instant::now() < deadline {
+            let n = d.read_timeout(&mut response, 100).map_err(|e| format!("Device info read failed: {e}"))?;
+            if n > 0 { last_response = response[..n].to_vec(); }
+            if n < 25 || &response[..2] != b"RB" || response[3] != request[3] { continue; }
+            let len = response[2] as usize;
+            if len < 25 || len > n { continue; }
+            if let Some(info) = Self::parse_device_info(&response[..len], request[3]) {
+                *self.screen_sc_supported.lock().unwrap() = [response[21], response[22], response[23]] > [1, 0, 2];
+                *self.firmware_info.lock().unwrap() = Some(info.clone());
+                return Ok(info);
+            }
+        }
+        Err(format!("No valid firmware reply within 600ms; received bytes: {:02x?}", last_response))
+    }
+
+    fn parse_device_info(response: &[u8], id: u8) -> Option<serde_json::Value> {
+        // Firmware 1.9.4 sends a 25-byte info reply with a zero trailing byte,
+        // not the checksum used by requests. Stock parses fields directly.
+        if response.len() < 25 || &response[..2] != b"RB" || response[3] != id || response[4] != 0x82 { return None; }
+        if response[2] as usize > response.len() || response[2] < 25 || !(1..=254).contains(&response[11]) { return None; }
+        Some(serde_json::json!({
+            "modelId": format!("{:02x}{:02x}{:02x}", response[5], response[6], response[7]),
+            "ledCount": response[11],
+            "firmware": format!("{}.{}.{}", response[21], response[22], response[23])
+        }))
     }
 
     pub fn build_segment_data(&self, colors: &[LedColor]) -> Vec<u8> {
@@ -283,9 +327,6 @@ impl HidController {
     }
 
     pub fn set_color(&self, section: u8, r: u8, g: u8, b: u8) -> Result<(), String> {
-        // probe first
-        let _ = self.send_rb(0x97, &[]);
-        thread::sleep(Duration::from_millis(20));
         let payload = self.build_section_payload(section, r, g, b);
         *self.last_color_payload.lock().unwrap() = Some(payload.clone());
         self.send_rb(0x86, &payload)?;
@@ -301,6 +342,16 @@ impl HidController {
         if let Some(ref payload) = *self.last_color_payload.lock().unwrap() {
             let _ = self.send_rb(0x86, payload);
         }
+        Ok(())
+    }
+
+    pub fn refresh_static_brightness(&self, color: &LedColor, value: u8) -> Result<(), String> {
+        // Stock static-mode brightness path: 0x87, 20ms, then 0x86.
+        // Do not replace the user's brightness ceiling with an audio sample.
+        self.send_rb(0x87, &[value])?;
+        thread::sleep(Duration::from_millis(20));
+        let payload = self.build_section_payload(1, color.r, color.g, color.b);
+        self.send_rb(0x86, &payload)?;
         Ok(())
     }
 
@@ -322,8 +373,6 @@ impl HidController {
         brightness: u8,
     ) -> Result<(), String> {
         *self.current_brightness.lock().unwrap() = brightness;
-        let _ = self.send_rb(0x97, &[]);
-        thread::sleep(Duration::from_millis(20));
         self.send_rb(0x87, &[brightness])?;
         thread::sleep(Duration::from_millis(30));
         let payload = self.build_section_payload(section, r, g, b);
@@ -360,10 +409,10 @@ impl HidController {
         let step_delay = Duration::from_millis((duration_ms / steps as u64).max(10));
         for i in (1..=steps).rev() {
             let bv = ((start_b as u32 * i) / steps) as u8;
-            let _ = self.send_rb(0x87, &[bv]);
+            self.send_rb(0x87, &[bv])?;
             thread::sleep(Duration::from_millis(20));
             if let Some(ref p) = payload {
-                let _ = self.send_rb(0x86, p);
+                self.send_rb(0x86, p)?;
             }
             let remaining = step_delay.saturating_sub(Duration::from_millis(20));
             if !remaining.is_zero() {
@@ -371,8 +420,8 @@ impl HidController {
             }
         }
         *self.current_brightness.lock().unwrap() = 0;
-        let off_payload: Vec<u8> = vec![0x01, 0, 0, 0, 0x47, 0x48, 0, 0, 0, 0xfe];
-        let _ = self.send_rb(0x86, &off_payload);
+        let off_payload = self.build_section_payload(1, 0, 0, 0);
+        self.send_rb(0x86, &off_payload)?;
         Ok(())
     }
 
@@ -418,5 +467,75 @@ impl HidController {
             return Ok(());
         }
         Err("resetBar: all attempts failed".into())
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+
+    #[test]
+    fn stock_screen_frame_uses_big_endian_length_and_sum() {
+        // Stock module 60895 setSyncScreen, ID=2, one cyan segment.
+        let packet = HidController::screen_packet(2, 0x80, &[1, 40, 150, 200, 71]).unwrap();
+        assert_eq!(packet, vec![83, 67, 0, 12, 2, 128, 1, 40, 150, 200, 71, 242]);
+        let long = HidController::screen_packet(2, 0x80, &vec![0; 355]).unwrap();
+        assert_eq!(&long[2..4], &[1, 106]);
+        let reports: Vec<_> = long.chunks(64).map(HidController::to_report).collect();
+        assert_eq!(reports.len(), 6);
+        assert_eq!(reports.last().unwrap().len(), 43);
+        assert!(reports.iter().all(|r| r[0] == 0));
+        let recovered: Vec<_> = reports.iter().flat_map(|r| r[1..].iter().copied()).collect();
+        assert_eq!(recovered, long);
+    }
+
+    #[test]
+    fn static_range_tracks_configured_layout() {
+        let hid = HidController::new();
+        hid.set_total_leds(100);
+        assert_eq!(hid.build_section_payload(1, 10, 20, 30), vec![1,10,20,30,100,101,0,0,0,254]);
+        hid.set_total_leds(254);
+        assert_eq!(hid.build_section_payload(1, 10, 20, 30), vec![1,10,20,30,254]);
+    }
+
+    #[test]
+    fn ids_match_stock_range_and_reports_are_not_padded() {
+        let hid = HidController::new();
+        assert_eq!(hid.next_id(), 2);
+        for _ in 0..1000 { assert!((1..=254).contains(&hid.next_id())); }
+        assert_eq!(HidController::to_report(&[82,66,6,2,130,30]), vec![0,82,66,6,2,130,30]);
+    }
+
+    #[test]
+    fn no_background_turn_off_commands() {
+        assert!(!include_str!("main.rs").contains("send_rb(0x97"));
+        assert!(!include_str!("effects.rs").contains("send_rb(0x97"));
+    }
+}
+
+#[cfg(test)]
+mod firmware_reply_tests {
+    #[test]
+    fn real_firmware_info_reply_has_no_request_checksum() {
+        let bytes = [0x52,0x42,0x19,0x02,0x82,0x00,0x05,0x01,0x18,0x01,0x00,0x36,0xcd,0xab,0x83,0x45,0x9e,0xbd,0xee,0xae,0xe5,0x01,0x09,0x04,0x00];
+        let info = super::HidController::parse_device_info(&bytes, 2).unwrap();
+        assert_eq!(info["ledCount"], 54);
+        assert_eq!(info["firmware"], "1.9.4");
+        assert!(super::HidController::parse_device_info(&bytes, 3).is_none());
+        assert!(super::HidController::parse_device_info(&bytes[..20], 2).is_none());
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    #[test]
+    fn second_writer_is_rejected_until_first_releases_device() {
+        let path=std::env::temp_dir().join(format!("synclight-owner-test-{}",std::process::id()));
+        let first=super::HidController::claim_control(&path).unwrap();
+        assert!(super::HidController::claim_control(&path).is_err());
+        drop(first);
+        let second=super::HidController::claim_control(&path).unwrap();
+        drop(second);
+        std::fs::remove_file(path).unwrap();
     }
 }

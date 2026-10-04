@@ -1,154 +1,29 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>openLightsSync</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><title>snzhy-OpenSycnlights</title><link rel="stylesheet" href="style.css"><script type="module" src="main.js"></script></head>
 <body>
-  <div class="window-frame">
-  <div class="titlebar" data-tauri-drag-region>
-    <div class="titlebar-title" data-tauri-drag-region>openLightsSync</div>
-    <div class="titlebar-controls">
-      <button id="titleMinimize" class="titlebar-btn" title="Minimize">&#x2013;</button>
-      <button id="titleMaximize" class="titlebar-btn" title="Maximize">&#x25A1;</button>
-      <button id="titleClose" class="titlebar-btn titlebar-btn-close" title="Close">&#x2715;</button>
-    </div>
-  </div>
-  <div class="app">
-    <header>
-      <div class="header-left">
-        <div id="deviceStatus" class="status disconnected">Disconnected</div>
-      </div>
-      <div class="header-right">
-        <button id="powerToggle" class="icon-btn power-btn" title="Power ON/OFF">&#x23FB;</button>
-        <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
-      </div>
-    </header>
-
-    <!-- Settings overlay -->
-    <div id="settingsOverlay" class="overlay hidden">
-      <div class="overlay-content">
-        <div class="overlay-header">
-          <h3>Settings</h3>
-          <button id="settingsClose" class="icon-btn">&times;</button>
-        </div>
-        <div class="setting-row">
-          <label>Show Modes</label>
-          <input type="checkbox" id="showEffects" checked>
-        </div>
-        <div class="setting-row">
-          <label>Show Audio Sync</label>
-          <input type="checkbox" id="showAudio">
-        </div>
-        <div class="setting-row">
-          <label>Show Screen Sync</label>
-          <input type="checkbox" id="showScreenSync">
-        </div>
-        <hr>
-        <h4>Power</h4>
-        <div class="setting-row">
-          <label>Fade duration (ms)</label>
-          <input id="fadeMs" type="number" min="50" max="5000" value="300" class="small-input">
-        </div>
-        <hr>
-        <h4>Bar Layout</h4>
-        <div class="row">
-          <label>Left</label><input id="secLeft" type="number" min="0" max="100" value="15" class="small-input">
-          <label>Top</label><input id="secTop" type="number" min="0" max="100" value="41" class="small-input">
-          <label>Right</label><input id="secRight" type="number" min="0" max="100" value="15" class="small-input">
-          <span id="totalLeds" class="val">= 71 LEDs</span>
-        </div>
-        <button id="saveSections" class="btn primary" style="margin-top:8px">Save Layout</button>
-        <hr>
-        <h4>Device</h4>
-        <div class="row actions">
-          <button id="connectBtn" class="btn">Connect</button>
-        </div>
-        <hr>
-        <h4>Debug — Single LED</h4>
-        <div class="row">
-          <label>Index</label>
-          <input id="ledIndex" type="number" min="0" value="0" class="small-input">
-          <button id="setLed" class="btn">Set LED</button>
-        </div>
-        <hr>
-        <h4>Log</h4>
-        <div id="log" class="log-area" style="max-height:150px"></div>
-      </div>
-    </div>
-
-    <section class="card" id="colorCard">
-      <h3>Color &amp; Brightness</h3>
-      <div id="pickerContainer"></div>
-      <div class="row" style="margin-top:12px">
-        <label>Brightness</label>
-        <input id="brightness" type="range" min="0" max="255" value="119" class="slider">
-        <span id="brightnessVal" class="val">119</span>
-      </div>
-    </section>
-
-    <section class="card" id="effectsCard">
-      <h3>Mode</h3>
-      <div class="row">
-        <select id="effectSelect">
-          <option value="static">Static</option>
-          <option value="rainbow">Rainbow</option>
-          <option value="pulse">Pulse</option>
-          <option value="chase">Chase</option>
-          <option value="chase_bounce">Chase Bounce</option>
-          <option value="breathe">Breathe</option>
-          <option value="fire">Fire</option>
-          <option value="wave">Wave</option>
-          <option value="sparkle">Sparkle</option>
-          <option value="heartbeat">Heartbeat</option>
-        </select>
-        <label>Speed</label>
-        <input id="effectSpeed" type="range" min="1" max="10" value="5" class="slider short">
-        <span id="effectSpeedVal" class="val">5</span>
-      </div>
-      <div class="row">
-        <button id="startEffect" class="btn primary">Start</button>
-      </div>
-    </section>
-
-    <section class="card" id="audioCard" style="display:none">
-      <h3>Audio Sync</h3>
-      <div class="row">
-        <select id="audioMode">
-          <option value="spectrum">Spectrum</option>
-          <option value="energy">Energy</option>
-          <option value="beat">Beat</option>
-        </select>
-        <label>Sensitivity</label>
-        <input id="audioSensitivity" type="range" min="1" max="30" value="10" class="slider short">
-        <span id="audioSensVal" class="val">1.0</span>
-      </div>
-      <div class="row">
-        <label>Source</label>
-        <select id="audioSource" style="flex:1;max-width:280px">
-          <option value="">Default Monitor</option>
-        </select>
-      </div>
-      <div class="row">
-        <button id="audioStart" class="btn primary">Start</button>
-      </div>
-    </section>
-
-    <section class="card" id="screenSyncCard" style="display:none">
-      <h3>Screen Sync</h3>
-      <div class="row">
-        <label>FPS</label>
-        <input id="ambiFps" type="range" min="1" max="10" value="3" class="slider short">
-        <span id="ambiFpsVal" class="val">3</span>
-        <button id="ambiStart" class="btn primary">Start</button>
-      </div>
-    </section>
-
-  </div>
-  </div>
-  <script src="color-picker.js"></script>
-  <script src="main.js"></script>
-</body>
-</html>
+<div class="app-shell">
+<aside class="sidebar">
+ <a class="brand" href="#lighting" aria-label="snzhy-OpenSycnlights home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 23V10a3 3 0 0 1 3-3h13M13 25V16a3 3 0 0 1 3-3h9"/></svg><span>OpenSycnlights<small>by snzhy</small></span></a>
+ <nav aria-label="Controller"><button data-view="controller" class="selected"><span data-icon="settings"></span>Controller</button><button data-view="lighting"><span data-icon="sun"></span>Lighting</button><button data-view="screen"><span data-icon="screen"></span>Screen sync</button><button data-view="audio"><span data-icon="audio"></span>Audio sync</button><button data-view="presets"><span data-icon="bookmark"></span>Presets</button><button data-view="layout"><span data-icon="layout"></span>LED layout</button></nav>
+ <div class="sidebar-bottom"><button class="nav-settings" data-view="settings"><span data-icon="settings"></span>Settings</button><div class="device-box"><span class="status-dot" id="statusDot"></span><div><strong id="deviceLabel">Checking device…</strong><small>Robobloq · 1a86:fe07</small></div><button class="icon-button" id="reconnect" aria-label="Reconnect device" title="Reconnect device"><span data-icon="refresh"></span></button></div></div>
+</aside>
+<main>
+ <header class="page-header"><div><h1 id="pageTitle">Lighting</h1><p id="pageDescription">Make the space around your screen your own.</p></div><button id="power" class="power-button" aria-pressed="false" disabled><span data-icon="power"></span><span id="powerLabel">Turn on</span></button></header>
+ <div id="previewNotice" class="notice" hidden>Interface preview · Open the native app to connect your USB light.</div>
+ <div id="connectionNotice" class="notice" hidden></div>
+ <div class="workspace">
+  <section class="visual-column" aria-label="Light visualization">
+   <div class="visual-stage"><div class="stage-top"><span>Desk backlight</span><span class="mode-badge" id="modeBadge">Idle</span></div><canvas id="lightCanvas" aria-label="Illustrative LED layout preview"></canvas><div class="stage-bottom"><span id="previewColor">#EFB575</span><span>Illustrative preview</span></div></div>
+   <div class="master-control"><div class="control-heading"><label for="brightness">Brightness</label><output id="brightnessValue" for="brightness">47%</output></div><input id="brightness" type="range" min="0" max="255" value="119"><div class="scale-labels"><span>Soft</span><span>Bright</span></div></div>
+   <div class="quick-palette" aria-label="Quick colors"><button data-color="#efb575" style="--swatch:#efb575" aria-label="Warm amber"></button><button data-color="#f3e5c5" style="--swatch:#f3e5c5" aria-label="Warm white"></button><button data-color="#92c5b4" style="--swatch:#92c5b4" aria-label="Sage"></button><button data-color="#79addc" style="--swatch:#79addc" aria-label="Sky blue"></button><button data-color="#ab94d2" style="--swatch:#ab94d2" aria-label="Lavender"></button><button data-color="#e79090" style="--swatch:#e79090" aria-label="Rose"></button><label class="custom-color" title="Custom color"><input id="colorPicker" type="color" value="#efb575" aria-label="Choose custom color"><span data-icon="plus"></span></label></div>
+   <div class="color-value"><label for="hexColor">Color</label><input id="hexColor" value="#EFB575" maxlength="7" spellcheck="false" aria-label="Hex color"><button id="applyColor" class="text-button">Apply</button></div>
+  </section>
+  <section class="controls-column" id="view" aria-live="polite"></section>
+ </div>
+ <footer><span id="activity">Ready when your light is connected.</span><span id="ledSummary">Layout: 71 LEDs</span></footer>
+</main>
+</div>
+<div id="toast" role="status" hidden></div>
+<dialog id="presetDialog"><form id="presetForm"><h2>Save your scene</h2><p>Keep this color, mode, brightness, and sync configuration together.</p><label for="presetName">Scene name</label><input id="presetName" maxlength="48" required autocomplete="off" placeholder="Evening at the desk"><div class="dialog-actions"><button type="button" id="cancelPreset" class="secondary-button">Cancel</button><button type="submit" class="primary-button">Save scene</button></div></form></dialog>
+</body></html>
