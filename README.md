@@ -13,7 +13,7 @@ Developed by **snzhy**, adapted from [openLightsSync by crisnar](https://github.
 ## What it does
 
 - **Screen sync:** sample the display's left, top and right edges. Colors come from the screen; manual color controls are hidden. Choose a monitor, capture rate, smoothing, sample depth and direction.
-- **Audio sync:** 15 styles, including Bounce, Spectrum, Beat, Comet, Twin bounce, Ripple, Volume bars, Pulse, Swell, Sparks, Prism, Tremor and Orbit. Choose from ten palettes or blend your own colors; adjust sensitivity, movement, trail width, quiet-sound gating and direction.
+- **Audio sync:** 21 styles, including Bounce, Spectrum, Beat, Comet, Twin bounce, Ripple, Volume bars, Pulse, Swell, Sparks, Prism, Tremor, Orbit, Cascade, Gravity, Flare, Pendulum, Rain and Plasma. Choose from ten palettes or blend your own colors; adjust sensitivity, movement, trail width, quiet-sound gating and direction.
 - **Lighting:** 20 modes, including Static, Rainbow, Aurora, Ocean currents, Scanner, Meteor, Fireworks and Rainbow wave.
 - **Presets:** 60 built-in scenes across lighting, audio and screen sync, with search, favorites, personal scenes, JSON import/export and eight screen profiles.
 - **Controller:** quick mode changes, brightness and power, connection status and optional resume of the last running mode.

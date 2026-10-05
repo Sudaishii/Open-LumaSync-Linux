@@ -58,6 +58,12 @@ Play music and watch the signal percentage. **Refresh** retries source discovery
 | Prism | A multi-color shimmer travels along the strip |
 | Tremor | Fine brightness movement follows the signal |
 | Orbit | A focused ring circles the strip |
+| Cascade | A bright stream falls continuously around the strip |
+| Gravity | A weighted glow drifts from side to side |
+| Flare | The strip swells with the signal |
+| Pendulum | A focused light swings smoothly |
+| Rain | Fine drops of color flow along the strip |
+| Plasma | Layered waves create a fluid color field |
 
 Rainbow, Aurora, Sunset, Ocean, Neon arcade, Ember, Forest and Candy provide multicolor effects. **Custom blend** combines the primary and audio secondary colors. **Selected color** deliberately uses one primary color. Choose a multicolor palette if you want changing colors.
 

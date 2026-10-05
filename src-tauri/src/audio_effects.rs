@@ -1,6 +1,6 @@
 use crate::hid::LedColor;
 
-pub const MODES: &[&str] = &["spectrum", "energy", "beat", "bounce", "comet", "twin_bounce", "ripple", "vu", "wave", "pulse", "swell", "spark", "prism", "tremor", "orbit"];
+pub const MODES: &[&str] = &["spectrum", "energy", "beat", "bounce", "comet", "twin_bounce", "ripple", "vu", "wave", "pulse", "swell", "spark", "prism", "tremor", "orbit", "cascade", "gravity", "flare", "pendulum", "rain", "plasma"];
 pub const PALETTES: &[&str] = &["rainbow", "aurora", "sunset", "ocean", "neon", "ember", "forest", "candy", "custom", "selected"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +109,35 @@ impl Renderer {
                     let head=(self.phase*0.5).rem_euclid(1.);
                     let distance=(head-position).abs().min(1.-(head-position).abs());
                     ((1.-distance/options.width.max(0.08)).clamp(0.,1.)*level,position+self.phase*0.2)
+                }
+                "cascade" => {
+                    let head=self.phase.rem_euclid(1.);
+                    let distance=(head-position).rem_euclid(1.);
+                    ((1.-distance/options.width.max(0.08)).clamp(0.,1.)*level,position+self.phase*0.22)
+                }
+                "gravity" => {
+                    let center=0.5+0.35*((self.phase*std::f64::consts::TAU).sin());
+                    let distance=(position-center).abs();
+                    ((1.-distance/0.55).clamp(0.,1.).powi(2)*level,position+self.phase*0.1)
+                }
+                "flare" => {
+                    let envelope=(0.35+0.65*(0.5+0.5*(self.phase*std::f64::consts::TAU).sin())).clamp(0.,1.);
+                    let edge=(position-0.5).abs()*2.;
+                    ((envelope*(1.-edge*0.35))*level,position+self.phase*0.16)
+                }
+                "pendulum" => {
+                    let swing=0.5+0.5*((self.phase*std::f64::consts::TAU*0.5).sin());
+                    let distance=(position-swing).abs();
+                    ((1.-distance/options.width.max(0.08)).clamp(0.,1.)*level,position+self.phase*0.13)
+                }
+                "rain" => {
+                    let drops=((position*31.0+self.phase*options.speed*2.0).sin()*0.5+0.5).powi(5);
+                    (drops*level,position+self.phase*0.3)
+                }
+                "plasma" => {
+                    let a=(position*std::f64::consts::TAU*2.0+self.phase*2.0).sin();
+                    let b=(position*std::f64::consts::TAU*5.0-self.phase*1.3).sin();
+                    ((0.25+0.75*(0.5+0.25*a+0.25*b))*level,position*2.0+self.phase*0.2)
                 }
                 _ => return LedColor::default(),
             };
