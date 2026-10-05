@@ -222,7 +222,6 @@ fn power_off_fade(
     fx.0.stop();
     audio.0.stop();
     ambi.0.stop();
-    std::thread::sleep(std::time::Duration::from_millis(150));
     let steps = (dur / 100).max(8) as u32;
     let color_payload = Some(hid.0.build_section_payload(section, r, g, b));
     hid.0.fade_to_off(current_brightness, color_payload, dur, steps)?;
@@ -257,7 +256,6 @@ fn effects_start(
     fx.0.stop();
     audio.0.stop();
     ambi.0.stop();
-    std::thread::sleep(std::time::Duration::from_millis(150));
     fx.0.start(&name, hid.0.clone(), count, spd)?;
     Ok(serde_json::json!({"ok": true}))
 }
@@ -331,7 +329,6 @@ fn audio_start(
     fx.0.stop();
     audio.0.stop();
     ambi.0.stop();
-    std::thread::sleep(std::time::Duration::from_millis(150));
     audio.0.start(hid.0.clone(), led_count, &m, sens, source, options)?;
     Ok(serde_json::json!({"ok": true}))
 }
@@ -366,6 +363,7 @@ fn ambilight_start(
     smoothing: Option<f64>,
     depth: Option<usize>,
     reverse: Option<bool>,
+    capture_scale: Option<f64>,
 ) -> Result<serde_json::Value, String> {
     let sections = *hid.0.sections.lock().unwrap();
     let fps = fps.unwrap_or(15);
@@ -373,13 +371,13 @@ fn ambilight_start(
     let smoothing = validation::finite_range(smoothing.unwrap_or(0.5),0.,0.95,"Smoothing")?;
     let depth = depth.unwrap_or(40);
     if !(1..=200).contains(&depth) { return Err("Sample depth must be 1–200 pixels.".into()); }
+    let capture_scale = validation::finite_range(capture_scale.unwrap_or(0.35),0.1,1.,"Capture scale")?;
     if !hid.0.is_open() { return Err("Backlight disconnected. Reconnect the USB device.".into()); }
     fx.0.stop();
     audio.0.stop();
     ambi.0.stop();
-    std::thread::sleep(std::time::Duration::from_millis(150));
     ambi.0.start(hid.0.clone(), sections, fps, ambilight::CaptureOptions {
-        output, smoothing, depth, reverse: reverse.unwrap_or(false),
+        output, smoothing, depth, reverse: reverse.unwrap_or(false), capture_scale,
     })?;
     Ok(serde_json::json!({"ok": true}))
 }
@@ -460,7 +458,7 @@ fn integration_check() -> Result<serde_json::Value,String> {
     audio.stop();
     std::thread::sleep(std::time::Duration::from_millis(250));
     let screen=Ambilight::new();
-    let screen_started=screen.start(hid.clone(),*hid.sections.lock().unwrap(),3,ambilight::CaptureOptions {output:None,smoothing:0.5,depth:40,reverse:false});
+    let screen_started=screen.start(hid.clone(),*hid.sections.lock().unwrap(),3,ambilight::CaptureOptions {output:None,smoothing:0.5,depth:40,reverse:false,capture_scale:1.});
     std::thread::sleep(std::time::Duration::from_millis(1200));
     let screen_running=screen.is_running();
     let screen_error=screen_started.err().or_else(||screen.error());
@@ -484,7 +482,10 @@ fn audio_check() -> Result<serde_json::Value, String> {
     if !audio_effects::MODES.contains(&mode.as_str()) { return Err("Unknown audio diagnostic mode".into()); }
     let palette=std::env::args().find_map(|a|a.strip_prefix("--audio-palette=").map(str::to_owned)).unwrap_or_else(||"selected".into());
     let options=audio_effects::Options {palette:audio_effects::Palette::parse(&palette)?,..Default::default()};
-    audio.start(hid.clone(),hid.get_total_leds(),&mode,2.,source,options)?;
+    let sensitivity = std::env::args().find_map(|a|a.strip_prefix("--audio-sensitivity=").map(str::to_owned))
+        .unwrap_or_else(||"2".into()).parse::<f64>().map_err(|_|"Invalid audio diagnostic sensitivity".to_string())?;
+    let sensitivity = validation::finite_range(sensitivity,0.1,5.,"Audio diagnostic sensitivity")?;
+    audio.start(hid.clone(),hid.get_total_leds(),&mode,sensitivity,source,options)?;
     let mut snapshots = Vec::new();
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -511,7 +512,7 @@ fn screen_check() -> Result<serde_json::Value, String> {
     hid.set_color_and_brightness(1, 120, 120, 120, 100)?;
     let screen = Ambilight::new();
     let started = screen.start(hid.clone(), *hid.sections.lock().unwrap(), fps,
-        ambilight::CaptureOptions {output:None, smoothing:0., depth:80, reverse:false});
+        ambilight::CaptureOptions {output:None, smoothing:0., depth:80, reverse:false,capture_scale:1.});
     let mut snapshots = Vec::new();
     if started.is_ok() {
         for _ in 0..20 {

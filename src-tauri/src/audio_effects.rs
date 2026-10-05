@@ -1,6 +1,6 @@
 use crate::hid::LedColor;
 
-pub const MODES: &[&str] = &["spectrum", "energy", "beat", "bounce", "comet", "twin_bounce", "ripple", "vu", "wave"];
+pub const MODES: &[&str] = &["spectrum", "energy", "beat", "bounce", "comet", "twin_bounce", "ripple", "vu", "wave", "pulse", "swell", "spark", "prism", "tremor", "orbit"];
 pub const PALETTES: &[&str] = &["rainbow", "aurora", "sunset", "ocean", "neon", "ember", "forest", "candy", "custom", "selected"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,6 +83,33 @@ impl Renderer {
                     let wave=(0.5+0.5*((position/options.width-self.phase)*std::f64::consts::TAU).sin()).powi(2);
                     ((0.08+0.92*wave)*level,position+self.phase*0.1)
                 }
+                "pulse" => {
+                    let envelope=(0.5+0.5*((self.phase*std::f64::consts::TAU).sin())).powi(2);
+                    (envelope*level,position+self.phase*0.08)
+                }
+                "swell" => {
+                    let center=(0.5+0.5*((self.phase*std::f64::consts::TAU).sin())).clamp(0.,1.);
+                    let width=options.width.max(0.08);
+                    (((1.-(position-center).abs()/width).clamp(0.,1.)*0.8+0.2)*level,position+self.phase*0.12)
+                }
+                "spark" => {
+                    let cell=((position*97.0).floor()+self.phase*options.speed*3.0).floor();
+                    let noise=((cell*12.9898).sin()*43758.5453).fract().abs();
+                    (((noise-0.55).max(0.)/0.45*0.9+0.1)*level,position+self.phase*0.14)
+                }
+                "prism" => {
+                    let shimmer=0.55+0.45*((position*std::f64::consts::TAU*2.0+self.phase*2.0).sin());
+                    (shimmer*level,position*1.7+self.phase*0.18)
+                }
+                "tremor" => {
+                    let wobble=(0.65+0.35*((position*std::f64::consts::TAU*4.0-self.phase*3.0).sin())).clamp(0.,1.);
+                    (wobble*level,position+self.phase*0.1)
+                }
+                "orbit" => {
+                    let head=(self.phase*0.5).rem_euclid(1.);
+                    let distance=(head-position).abs().min(1.-(head-position).abs());
+                    ((1.-distance/options.width.max(0.08)).clamp(0.,1.)*level,position+self.phase*0.2)
+                }
                 _ => return LedColor::default(),
             };
             let c = palette_color(options.palette,primary,&options.secondary,palette_position);
@@ -97,7 +124,13 @@ fn bounce_position(phase: f64) -> f64 {
     let p=phase.rem_euclid(2.);
     if p<=1. {p} else {2.-p}
 }
+pub fn brightness_response(intensity: f64) -> f64 {
+    // Lift quiet signals into a visible LED range without raising the user's
+    // brightness ceiling or lighting the strip during silence.
+    intensity.clamp(0., 1.).sqrt()
+}
 fn scale(c: &LedColor, intensity: f64) -> LedColor {
+    let intensity = brightness_response(intensity);
     LedColor {r:(c.r as f64*intensity).round() as u8,g:(c.g as f64*intensity).round() as u8,b:(c.b as f64*intensity).round() as u8}
 }
 fn blend(a: &LedColor,b: &LedColor,t: f64) -> LedColor {
@@ -191,6 +224,18 @@ mod tests {
             options.width=0.8;
             let wide=Renderer::default().render(mode,54,0.8,&[0.8;8],&primary(),&options,0.1);
             assert!(narrow.iter().zip(wide).any(|(a,b)|(a.r,a.g,a.b)!=(b.r,b.g,b.b)),"{mode} ignored width");
+        }
+    }
+
+    #[test]
+    fn quiet_background_music_produces_a_visible_volume_frame() {
+        let options = Options {palette: Palette::Selected, ..Default::default()};
+        // An audible, low-volume signal must stay visible instead of being
+        // multiplied down to a handful of RGB values.
+        for mode in ["energy", "bounce", "beat", "vu"] {
+            let colors = Renderer::default().render(mode, 54, 0.08, &[0.08;8], &primary(), &options, 1./30.);
+            let peak = colors.iter().map(|c| c.r.max(c.g).max(c.b)).max().unwrap();
+            assert!(peak >= 60, "{mode} made quiet music barely visible: peak={peak}");
         }
     }
 }

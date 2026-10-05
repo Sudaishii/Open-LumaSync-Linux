@@ -13,9 +13,9 @@ Developed by **snzhy**, adapted from [openLightsSync by crisnar](https://github.
 ## What it does
 
 - **Screen sync:** sample the display's left, top and right edges. Colors come from the screen; manual color controls are hidden. Choose a monitor, capture rate, smoothing, sample depth and direction.
-- **Audio sync:** nine styles, including Bounce, Spectrum, Beat, Comet, Twin bounce, Ripple and Volume bars. Choose from ten palettes or blend your own colors; adjust sensitivity, movement, trail width, quiet-sound gating and direction.
-- **Lighting:** ten modes, including Static, Rainbow, Breathe, Chase, Fire, Wave and Heartbeat.
-- **Presets:** 22 built-in scenes, personal scenes, JSON import/export and four screen profiles: Balanced, Gaming, Cinema and Low CPU.
+- **Audio sync:** 15 styles, including Bounce, Spectrum, Beat, Comet, Twin bounce, Ripple, Volume bars, Pulse, Swell, Sparks, Prism, Tremor and Orbit. Choose from ten palettes or blend your own colors; adjust sensitivity, movement, trail width, quiet-sound gating and direction.
+- **Lighting:** 20 modes, including Static, Rainbow, Aurora, Ocean currents, Scanner, Meteor, Fireworks and Rainbow wave.
+- **Presets:** 60 built-in scenes across lighting, audio and screen sync, with search, favorites, personal scenes, JSON import/export and eight screen profiles.
 - **Controller:** quick mode changes, brightness and power, connection status and optional resume of the last running mode.
 - **Omarchy plugin:** a Backlight popup beside the tray, login startup and background control through the same app and USB owner.
 - **Customization:** dark/light themes, five accents, compact controls, reduced motion and LED-layout calibration.
@@ -30,7 +30,7 @@ Developed by **snzhy**, adapted from [openLightsSync by crisnar](https://github.
 | Other Linux desktops | Standalone source build is available; desktop and capture compatibility need testing |
 | Wi-Fi-only backlights | Not supported; this application uses USB HID |
 
-Screen sync is experimental and currently targeted at Hyprland with `grim`. Performance depends on your display, capture workload and hardware. Audio sync captures a PulseAudio/PipeWire playback monitor or selected input; the backlight's built-in microphone is separate.
+Screen sync is experimental and currently targeted at Hyprland with `grim`. Choose 0.2×, 0.35×, 0.5× or full capture quality to trade detail for CPU use; live capture, processing and USB timings appear while it runs. Performance depends on your display, capture workload and hardware. Audio sync captures a PulseAudio/PipeWire playback monitor or selected input; the backlight's built-in microphone is separate.
 
 ## Install
 

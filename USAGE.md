@@ -19,7 +19,7 @@ The tested device reports 54 LEDs, but other units may differ. The app constrain
 ## Screen sync
 
 1. Select the monitor behind your backlight. On Hyprland, names such as `DP-1` and `HDMI-A-1` are capture output IDs.
-2. Select a screen preset or set capture rate, smoothing and sample depth.
+2. Select a screen preset or set capture rate, capture quality, smoothing and sample depth.
 3. Start Screen sync and move between visibly different screen content.
 
 Colors are sampled from the display edges; the mode has no manual color picker. Brightness still controls the overall light output. **Reverse LED order** changes how sampled colors map along the strip.
@@ -33,7 +33,7 @@ Colors are sampled from the display edges; the mode has no manual color picker. 
 | Cinema | 12 | 75% | 120 px |
 | Low CPU | 8 | 50% | 32 px |
 
-The status line reports measured FPS. The target is not a guaranteed rate; `grim` screenshot capture and USB overhead vary by machine. Screen sync is experimental.
+Capture quality scales the screenshot before processing: 0.2× uses the least CPU, 0.35× is balanced, 0.5× keeps more detail and 1× captures full size. The status line reports measured FPS plus capture, processing and USB write timings. The target is not a guarantee; `grim` screenshot capture and USB overhead vary by machine. Screen sync is experimental.
 
 ## Audio sync
 
@@ -52,16 +52,26 @@ Play music and watch the signal percentage. **Refresh** retries source discovery
 | Ripple | A colored ring moves outward from the center |
 | Volume bars | Bars grow from the center with volume |
 | Ribbon wave | Traveling ribbons brighten with audio |
+| Pulse | The full strip breathes with the signal |
+| Swell | A soft illuminated region grows and contracts |
+| Sparks | Small points of light appear with louder moments |
+| Prism | A multi-color shimmer travels along the strip |
+| Tremor | Fine brightness movement follows the signal |
+| Orbit | A focused ring circles the strip |
 
 Rainbow, Aurora, Sunset, Ocean, Neon arcade, Ember, Forest and Candy provide multicolor effects. **Custom blend** combines the primary and audio secondary colors. **Selected color** deliberately uses one primary color. Choose a multicolor palette if you want changing colors.
 
 Adjust sensitivity and movement speed. **Shape the response** includes trail/band width, a gate that ignores quiet signals and reversed direction. Some styles use width differently. Silence or gating can dim or darken the strip while capture stays active. Ripple and Beat respond to sound; they do not claim BPM detection. Changes to audio settings restart the active worker automatically.
 
+For continuous background music, start with **Bounce** or **Volume bars**, sensitivity **1.5**, and a quiet-sound gate of **0%**. A Bounce trail width around **24%** makes its movement easier to see. Raising the gate ignores more quiet music; it does not increase responsiveness. Adjust the master brightness to suit your room.
+
+Spectrum separates eight frequency ranges. Frequencies close to a range boundary can brighten both neighboring ranges; its frequency resolution is about **11 Hz**.
+
 ## Lighting and presets
 
-Lighting provides Static, Rainbow, Pulse, Chase, Chase bounce, Breathe, Fire, Wave, Sparkle and Heartbeat. Manual colors apply where the effect uses them; Rainbow generates its own colors.
+Lighting provides 20 modes, including Static, Rainbow, Pulse, Chase, Aurora, Ocean currents, Color sweep, Scanner, Meteor, Twinkle, Color blossoms and Rainbow wave. Manual colors apply where the effect uses them; palette effects generate their own colors.
 
-In **Presets**, choose a category, load a scene to prepare its settings or use **Run now** to start it. Built-in presets retain your LED layout, selected display/source and direction. Personal scenes include their saved configuration, so check the layout when importing scenes from another setup.
+In **Presets**, search 60 built-in scenes by name or tag, filter by lighting/audio/screen/favorites/personal, star favorites, load a scene to prepare its settings or use **Run now** to start it. Built-in presets retain your LED layout, selected display/source and direction. Personal scenes include their saved configuration, so check the layout when importing scenes from another setup.
 
 Save personal scenes and use JSON **Export** / **Import** to move them between machines. Theme, accents, compact controls and reduced motion are available in **Settings**.
 

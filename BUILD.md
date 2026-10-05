@@ -45,6 +45,8 @@ They cover controller state, resume, native persistence, scenes, responsive layo
 
 `tests/audio-live-check.cjs`, `tests/sync-live-check.cjs` and `tests/shell-live-check.py` drive real hardware or desktop capture. Read each script before running: they change lighting, may show fullscreen colors/play tones, and require the corresponding desktop environment. The shell test enables resume and selects `DP-1`; adjust it for your own monitor. Do not run isolated USB diagnostics alongside another controller process.
 
+The audio check accepts `SYNC_AUDIO_MODE`, `SYNC_AUDIO_PALETTE`, and `SYNC_AUDIO_FREQUENCY` (20–20000 Hz). To check volume changes during continuous background audio, run it with `SYNC_AUDIO_CONTINUOUS=1 SYNC_AUDIO_SENSITIVITY=5 SYNC_AUDIO_MODE=energy SYNC_AUDIO_PALETTE=selected`. This compares steady-state brightness during background-only and louder playback segments; it does not infer physical brightness from USB write success.
+
 ## Optional Tauri development and bundles
 
 ```sh

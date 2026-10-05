@@ -1,5 +1,5 @@
 use crate::hid::{HidController, LedColor};
-use crate::audio_effects::{Options, Palette, Renderer};
+use crate::audio_effects::{brightness_response, Options, Palette, Renderer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -10,6 +10,7 @@ use libpulse_simple_binding as psimple;
 
 const SAMPLE_RATE: u32 = 44100;
 const BUFFER_FRAMES: usize = 512;
+const SPECTRUM_FRAMES: usize = 4096;
 const NUM_BANDS: usize = 8;
 
 #[derive(Clone, Default, serde::Serialize)]
@@ -21,6 +22,7 @@ pub struct AudioMetrics {
     pub palette: String,
     pub mode: String,
     pub distinct_colors: usize,
+    pub bands: Vec<f64>,
 }
 
 pub struct AudioSync {
@@ -166,6 +168,8 @@ fn run_audio_capture(
             let mut buf = vec![0u8; BUFFER_FRAMES * 2];
             let mut smooth_level = 0.;
             let mut smooth_bands = vec![0.; NUM_BANDS];
+            let mut spectrum = SpectrumAnalyzer::new();
+            let dt = BUFFER_FRAMES as f64 / SAMPLE_RATE as f64;
             while running.load(Ordering::Relaxed) {
                 if let Err(e) = recorder.read(&mut buf) {
                     *capture_error.lock().unwrap() = Some(format!("Audio capture read failed: {e}"));
@@ -176,18 +180,18 @@ fn run_audio_capture(
                     i16::from_le_bytes([c[0],c[1]]) as f64 / 32768.).collect();
                 let rms = (samples.iter().map(|s|s*s).sum::<f64>()/samples.len() as f64).sqrt();
                 let level = response_level(rms,sensitivity);
-                let factor = if level > smooth_level {0.2} else {0.05};
-                smooth_level += (level-smooth_level)*factor;
+                smooth_level = smooth_envelope(smooth_level, level, dt);
                 if mode == "spectrum" {
-                    let bands = simple_bands(&samples,sensitivity);
+                    let bands = spectrum.update(&samples, sensitivity);
                     for i in 0..NUM_BANDS {
-                        let factor = if bands[i]>smooth_bands[i] {0.2} else {0.05};
-                        smooth_bands[i] += (bands[i]-smooth_bands[i])*factor;
+                        smooth_bands[i] = smooth_envelope(smooth_bands[i], bands[i], dt);
                     }
                 }
                 // One replaceable snapshot, never a queue of old sound samples.
                 *latest.lock().unwrap() = Some((smooth_level,smooth_bands.clone()));
-                metrics.lock().unwrap().level = smooth_level;
+                let mut stats = metrics.lock().unwrap();
+                stats.level = smooth_level;
+                if mode == "spectrum" { stats.bands = smooth_bands.clone(); }
             }
         });
         let result = (|| -> Result<(), String> {
@@ -209,7 +213,7 @@ fn run_audio_capture(
                         // a screen-mode restart on every identical audio frame.
                         let target = hid.get_brightness();
                         let response=if level<=options.noise_gate {0.} else {level};
-                        let brightness = if target==0 {0} else {((response*target as f64).round() as u8).max(1)};
+                        let brightness = if target==0 {0} else {((brightness_response(response)*target as f64).round() as u8).max(1)};
                         if previous_energy != Some((rgb,brightness)) {
                             hid.refresh_static_brightness(&color,brightness)?;
                             metrics.lock().unwrap().output_brightness = brightness;
@@ -220,6 +224,9 @@ fn run_audio_capture(
                         let colors=renderer.render(mode,count,level,&bands,&color,&options,now.duration_since(last_frame).as_secs_f64());
                         last_frame=now;
                         metrics.lock().unwrap().distinct_colors=colors.iter().map(|c|(c.r,c.g,c.b)).collect::<std::collections::HashSet<_>>().len();
+                        let peak = colors.iter().map(|c| c.r.max(c.g).max(c.b)).max().unwrap_or(0);
+                        metrics.lock().unwrap().output_brightness =
+                            (peak as u16 * hid.get_brightness() as u16 / 255) as u8;
                         let unchanged = previous_colors.as_ref().is_some_and(|p|
                             p.iter().zip(&colors).all(|(a,b)|a.r==b.r&&a.g==b.g&&a.b==b.b));
                         if !unchanged {
@@ -245,13 +252,37 @@ fn run_audio_capture(
 }
 
 fn response_level(rms: f64, sensitivity: f64) -> f64 {
-    // Smooth compression keeps loud music responsive instead of clipping all
-    // peaks to the same 100% value. Silence remains zero.
-    1.0 - (-rms * sensitivity * 6.0).exp()
+    // A gradual gain curve keeps continuous BGM below the ceiling, leaving
+    // room for louder notes even at maximum sensitivity.
+    let amplified = rms.max(0.) * sensitivity.sqrt() * 6.;
+    amplified / (1. + amplified)
+}
+
+fn smooth_envelope(current: f64, target: f64, dt: f64) -> f64 {
+    let time_constant = if target > current {0.012} else {0.09};
+    let factor = 1. - (-dt / time_constant).exp();
+    current + (target - current) * factor
+}
+
+struct SpectrumAnalyzer {
+    samples: Vec<f64>,
+}
+
+impl SpectrumAnalyzer {
+    fn new() -> Self { Self {samples: vec![0.; SPECTRUM_FRAMES]} }
+
+    fn update(&mut self, samples: &[f64], sensitivity: f64) -> Vec<f64> {
+        let count = samples.len().min(SPECTRUM_FRAMES);
+        self.samples.copy_within(count.., 0);
+        self.samples[SPECTRUM_FRAMES-count..].copy_from_slice(&samples[samples.len()-count..]);
+        simple_bands(&self.samples, sensitivity)
+    }
 }
 
 fn simple_bands(samples: &[f64], sensitivity: f64) -> Vec<f64> {
     let n = samples.len();
+    if n < 2 { return vec![0.; NUM_BANDS]; }
+    assert!(n.is_power_of_two());
     let half = n / 2;
     let band_edges: [usize; NUM_BANDS + 1] = [
         freq_to_bin(20.0, n),
@@ -265,36 +296,60 @@ fn simple_bands(samples: &[f64], sensitivity: f64) -> Vec<f64> {
         freq_to_bin(20000.0, n).min(half),
     ];
 
-    let mut magnitudes = vec![0.0f64; half + 1];
-    for k in 0..=band_edges[NUM_BANDS].min(half) {
-        let w = 2.0 * std::f64::consts::PI * k as f64 / n as f64;
-        let mut re = 0.0;
-        let mut im = 0.0;
-        for (i, &s) in samples.iter().enumerate() {
-            let a = w * i as f64;
-            re += s * a.cos();
-            im -= s * a.sin();
+    // Overlapping 4096-frame windows resolve bass at about 10.8 Hz, while
+    // capture still publishes a fresh snapshot every 512 frames (~12 ms).
+    // A Hann window prevents off-bin tones from leaking across the strip.
+    let mean = samples.iter().sum::<f64>() / n as f64;
+    let mut window_power = 0.;
+    let mut spectrum: Vec<(f64, f64)> = samples.iter().enumerate().map(|(i, &sample)| {
+        let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / (n-1) as f64).cos();
+        window_power += window * window;
+        ((sample - mean) * window, 0.)
+    }).collect();
+
+    // In-place radix-2 FFT; no quadratic DFT work in the capture thread.
+    let mut reversed = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while reversed & bit != 0 { reversed ^= bit; bit >>= 1; }
+        reversed ^= bit;
+        if i < reversed { spectrum.swap(i, reversed); }
+    }
+    let mut size = 2;
+    while size <= n {
+        let angle = -std::f64::consts::TAU / size as f64;
+        let step = (angle.cos(), angle.sin());
+        for start in (0..n).step_by(size) {
+            let mut twiddle = (1., 0.);
+            for offset in 0..size/2 {
+                let even = spectrum[start + offset];
+                let odd = spectrum[start + offset + size/2];
+                let rotated = (odd.0*twiddle.0 - odd.1*twiddle.1, odd.0*twiddle.1 + odd.1*twiddle.0);
+                spectrum[start + offset] = (even.0 + rotated.0, even.1 + rotated.1);
+                spectrum[start + offset + size/2] = (even.0 - rotated.0, even.1 - rotated.1);
+                twiddle = (twiddle.0*step.0 - twiddle.1*step.1, twiddle.0*step.1 + twiddle.1*step.0);
+            }
         }
-        magnitudes[k] = (re * re + im * im).sqrt() / n as f64;
+        size *= 2;
     }
 
     let mut bands = vec![0.0f64; NUM_BANDS];
     for b in 0..NUM_BANDS {
         let lo = band_edges[b].max(1);
-        let hi = band_edges[b + 1].max(lo + 1).min(half);
+        let hi = band_edges[b + 1].min(half + 1);
         let mut sum = 0.0;
         for k in lo..hi {
-            sum += magnitudes[k] * magnitudes[k];
+            let (re, im) = spectrum[k];
+            sum += re*re + im*im;
         }
-        // Sum band energy rather than averaging amplitude across bins. The old
-        // average made wider bands almost black even when playback was audible.
-        bands[b] = ((2.0 * sum).sqrt() * sensitivity * 6.0).min(1.0);
+        let rms = (2. * sum / (n as f64 * window_power)).sqrt();
+        bands[b] = response_level(rms, sensitivity);
     }
     bands
 }
 
 fn freq_to_bin(freq: f64, n: usize) -> usize {
-    (freq * n as f64 / SAMPLE_RATE as f64).round() as usize
+    (freq * n as f64 / SAMPLE_RATE as f64).ceil() as usize
 }
 
 #[cfg(test)]
@@ -313,6 +368,54 @@ mod source_tests {
 
 #[cfg(test)]
 mod signal_tests {
+    fn analyze_tone(frequency: f64) -> Vec<f64> {
+        let samples: Vec<_> = (0..super::SPECTRUM_FRAMES).map(|i|
+            (std::f64::consts::TAU*frequency*i as f64/super::SAMPLE_RATE as f64).sin()*0.08).collect();
+        let mut analyzer = super::SpectrumAnalyzer::new();
+        let mut bands = Vec::new();
+        for block in samples.chunks(super::BUFFER_FRAMES) { bands = analyzer.update(block, 1.0); }
+        bands
+    }
+
+    #[test]
+    fn bass_tone_is_not_duplicated_into_the_next_band() {
+        let bands = analyze_tone(40.);
+        assert!(bands[0] > bands[1] * 2.0,
+            "40 Hz belongs in the 20–60 Hz band, not equally in 60–250 Hz: {bands:?}");
+    }
+
+    #[test]
+    fn equal_volume_tones_map_to_all_eight_bands_with_consistent_energy() {
+        for (frequency, expected) in [(40.,0), (120.,1), (375.,2), (1000.,3), (3000.,4), (5000.,5), (9000.,6), (15000.,7)] {
+            let bands = analyze_tone(frequency);
+            let strongest = bands.iter().enumerate().max_by(|(_,a),(_,b)| a.total_cmp(b)).unwrap().0;
+            assert_eq!(strongest, expected, "{frequency} Hz went to the wrong band: {bands:?}");
+            // 0.08 peak sine => 0.0566 RMS; the calibrated response is ~0.253.
+            assert!((bands[expected] - 0.253).abs() < 0.02,
+                "equal-volume tones must not become dimmer in wide bands: {frequency} Hz: {bands:?}");
+            assert!(bands.iter().enumerate().all(|(i,&v)| i == expected || v < 0.025),
+                "off-bin tones should not light unrelated frequency ranges: {frequency} Hz: {bands:?}");
+        }
+    }
+
+    #[test]
+    fn constant_offset_is_not_mistaken_for_music() {
+        let bands = super::SpectrumAnalyzer::new().update(&vec![0.3;super::SPECTRUM_FRAMES], 5.);
+        assert!(bands.iter().all(|&v| v < 1e-9), "DC offset lit the spectrum: {bands:?}");
+    }
+
+    #[test]
+    fn frequencies_at_band_boundaries_blend_only_adjacent_ranges() {
+        for (lower,frequency) in [60.,250.,500.,2000.,4000.,6000.,12000.].into_iter().enumerate() {
+            let bands = analyze_tone(frequency);
+            let strongest = bands.iter().enumerate().max_by(|(_,a),(_,b)| a.total_cmp(b)).unwrap().0;
+            assert!(strongest == lower || strongest == lower+1,
+                "{frequency} Hz should blend the two neighboring ranges: {bands:?}");
+            assert!(bands.iter().enumerate().all(|(i,&v)| i == lower || i == lower+1 || v < 0.025),
+                "a boundary tone lit an unrelated range: {frequency} Hz: {bands:?}");
+        }
+    }
+
     #[test]
     fn quiet_audible_tone_produces_visible_spectrum_and_silence_is_zero() {
         let samples: Vec<_> = (0..super::BUFFER_FRAMES).map(|i|
@@ -325,6 +428,24 @@ mod signal_tests {
 
 #[cfg(test)]
 mod response_tests {
+    #[test]
+    fn volume_envelope_reacts_quickly_and_releases_between_accents() {
+        let dt = super::BUFFER_FRAMES as f64 / super::SAMPLE_RATE as f64;
+        let first = super::smooth_envelope(0., 1., dt);
+        assert!(first > 0.6, "an accent should become visible within one capture block: {first}");
+        let mut falling = 1.;
+        for _ in 0..13 { falling = super::smooth_envelope(falling, 0., dt); }
+        assert!(falling < 0.2, "old audio should fade within 150 ms: {falling}");
+    }
+
+    #[test]
+    fn maximum_sensitivity_preserves_continuous_music_dynamics() {
+        let background = super::response_level(0.07, 5.);
+        let accent = super::response_level(0.20, 5.);
+        assert!(accent - background > 0.2,
+            "continuous BGM and louder accents need different light levels: {background} -> {accent}");
+    }
+
     #[test]
     fn loud_music_keeps_dynamics_instead_of_clipping_flat() {
         assert_eq!(super::response_level(0.,1.),0.);
